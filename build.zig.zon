@@ -1,0 +1,24 @@
+.{
+    .name = .collector,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0-dev.747+493ad58ff",
+    .fingerprint = 0xcedbf54c3db22bae,
+    .dependencies = .{
+        .ptz = .{
+            .path = "../ptz",
+        },
+        .jetquery = .{
+            .url = "git+https://github.com/jetzig-framework/jetquery#0268accfbc299fd888546f720a5424dad9da2eb4",
+            .hash = "jetquery-0.0.0-TNf3zuTABgCuCBZIaRndYQNCXHgiLa8lm97pK9Kaujzk",
+        },
+        .args = .{
+            .url = "git+https://github.com/ikskuh/zig-args#8ae26b44a884ff20dca98ee84c098e8f8e94902f",
+            .hash = "args-0.0.0-CiLiqojRAACGzDRO7A9dw7kWSchNk29caJZkXuMCb0Cn",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
