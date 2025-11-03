@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const sdk = @import("ptz").Sdk(.en);
+
 const cli = @import("cli.zig");
 const database = @import("database.zig");
 const utils = @import("utils.zig");
@@ -13,26 +15,50 @@ const Context = struct {
     stdout: *std.Io.Writer,
 };
 
-// const owned: []const []const u8 = &.{
-//     "bw10-49",
-//     "swsh10-073", // VMAX
-//     "swsh11-088",
-//     "swsh3.5-26", // has regular and foil
-//     "swshp-SWSH243", // Lost Origin Promo
-//     "xy3-46",
-//     "xy7-90", // EX, bad condition
-//     "xyp-XY108", // EX Promo
-// };
+fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
+    try stderr.print("missing argument '--{s}'\n", .{arg});
+}
+
+fn notAPokemon(stderr: *std.Io.Writer) !void {
+    try stderr.print("found a non-Pokemon card\n", .{});
+}
+
+/// Get the Pokemon payload from a Card, otherwise error
+fn unwrapPokemon(card: sdk.Card) error{NonPokemonCard}!sdk.Card.Pokemon {
+    return switch (card) {
+        .pokemon => |pokemon| pokemon,
+        else => error.NonPokemonCard,
+    };
+}
+
+/// Check that this id represents a Pokemon card
+fn isPokemon(allocator: std.mem.Allocator, id: []const u8) !bool {
+    const card: sdk.Card = try .get(allocator, .{
+        .id = id,
+    });
+
+    _ = unwrapPokemon(card) catch |e| switch (e) {
+        error.NonPokemonCard => return false,
+    };
+
+    return true;
+}
+
+fn exists(repo: *database.Repo, id: []const u8) !bool {
+    const query = repo.Query(.Owned)
+        .select()
+        .where(.{ .card_id = id })
+        .exists();
+
+    return repo.execute(query);
+}
 
 fn innerMain(ctx: *Context) !u8 {
     switch (ctx.args) {
-        .init => {
-            try database.createDb(&ctx.repo);
-            return 0;
-        },
+        .init => try database.createDb(&ctx.repo),
         .ls => |args| {
             const name = args.name orelse {
-                try ctx.stderr.print("missing '--name'\n", .{});
+                try missingArg(ctx.stderr, "name");
                 return 1;
             };
 
@@ -40,12 +66,12 @@ fn innerMain(ctx: *Context) !u8 {
             defer missing.destroy();
 
             while (try missing.next()) |card| {
-                const pokemon = switch (card) {
-                    .pokemon => |pokemon| pokemon,
-                    else => {
-                        try ctx.stderr.print("found a non-pokemon card\n", .{});
+                const pokemon = unwrapPokemon(card) catch |e| switch (e) {
+                    error.NonPokemonCard => {
+                        try notAPokemon(ctx.stderr);
                         return 1;
                     },
+                    else => return e,
                 };
 
                 try ctx.stdout.print("{s} {s} - ", .{ pokemon.set.name, pokemon.localId });
@@ -58,13 +84,49 @@ fn innerMain(ctx: *Context) !u8 {
 
                 try ctx.stdout.writeByte('\n');
             }
-            return 0;
         },
-        else => {
-            try ctx.stderr.print("this operation is not implemented yet, stay tuned\n", .{});
-            return 1;
+        .add => |args| {
+            const id = args.id orelse {
+                try missingArg(ctx.stderr, "id");
+                return 1;
+            };
+
+            if (!try isPokemon(ctx.allocator, id)) {
+                try notAPokemon(ctx.stderr);
+                return 1;
+            }
+
+            // TODO: check it doesn't exist already
+            const query = ctx.repo.Query(.Owned)
+                .insert(.{ .card_id = id });
+
+            try ctx.repo.execute(query);
+
+            try ctx.stdout.print("added '{s}' to database\n", .{id});
+        },
+        .rm => |args| {
+            const id = args.id orelse {
+                try missingArg(ctx.stderr, "id");
+                return 1;
+            };
+
+            if (!try isPokemon(ctx.allocator, id)) {
+                try notAPokemon(ctx.stderr);
+                return 1;
+            }
+
+            // TODO: check it already exists
+            const query = ctx.repo.Query(.Owned)
+                .delete()
+                .where(.{ .card_id = id });
+
+            try ctx.repo.execute(query);
+
+            try ctx.stdout.print("removed '{s}' from database\n", .{id});
         },
     }
+
+    return 0;
 }
 
 pub fn main() !u8 {
@@ -111,5 +173,5 @@ pub fn main() !u8 {
         .stdout = stdout,
     };
 
-    return innerMain(&ctx) catch return 1;
+    return innerMain(&ctx);
 }

@@ -4,16 +4,14 @@ const args = @import("args");
 
 const Void = struct {};
 
+// TODO: support multiple ids in add/rm?
+
 pub const Args = union(enum) {
-    // NOTE: technically Add/Rm could just be the id
-    // but, by receiving the pokemon name too, we can check if the id is valid
     const Add = struct {
-        name: ?[]const u8 = null,
         id: ?[]const u8 = null,
     };
 
     const Rm = struct {
-        name: ?[]const u8 = null,
         id: ?[]const u8 = null,
     };
 
