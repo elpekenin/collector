@@ -4,8 +4,9 @@ const sdk = @import("ptz").Sdk(.en);
 
 const cli = @import("cli.zig");
 const database = @import("database.zig");
-const utils = @import("utils.zig");
 const MissingIterator = @import("MissingIterator.zig");
+
+const Query = database.Query;
 
 const Context = struct {
     allocator: std.mem.Allocator,
@@ -15,16 +16,14 @@ const Context = struct {
     stdout: *std.Io.Writer,
 };
 
+const Error = error{NonPokemonCard};
+
 fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
     try stderr.print("missing argument '--{s}'\n", .{arg});
 }
 
-fn notAPokemon(stderr: *std.Io.Writer) !void {
-    try stderr.print("found a non-Pokemon card\n", .{});
-}
-
 /// Get the Pokemon payload from a Card, otherwise error
-fn unwrapPokemon(card: sdk.Card) error{NonPokemonCard}!sdk.Card.Pokemon {
+fn unwrapPokemon(card: sdk.Card) Error!sdk.Card.Pokemon {
     return switch (card) {
         .pokemon => |pokemon| pokemon,
         else => error.NonPokemonCard,
@@ -32,25 +31,53 @@ fn unwrapPokemon(card: sdk.Card) error{NonPokemonCard}!sdk.Card.Pokemon {
 }
 
 /// Check that this id represents a Pokemon card
-fn isPokemon(allocator: std.mem.Allocator, id: []const u8) !bool {
-    const card: sdk.Card = try .get(allocator, .{
+fn validateCardId(allocator: std.mem.Allocator, stderr: *std.Io.Writer, id: []const u8) !void {
+    const card = sdk.Card.get(allocator, .{
         .id = id,
-    });
+    }) catch |e| switch (e) {
+        error.ServerErrorStatus => {
+            try stderr.print("card '{s}' does not exist\n", .{id});
+            return error.NotACard;
+        },
+        else => return e,
+    };
+    defer card.free(allocator);
 
     _ = unwrapPokemon(card) catch |e| switch (e) {
-        error.NonPokemonCard => return false,
+        error.NonPokemonCard => {
+            try stderr.print("card '{s}' is not a Pokemon\n", .{id});
+            return e;
+        },
     };
-
-    return true;
 }
 
 fn exists(repo: *database.Repo, id: []const u8) !bool {
-    const query = repo.Query(.Owned)
-        .select()
-        .where(.{ .card_id = id })
-        .exists();
+    const result = try Query(.Owned)
+        .findBy(.{ .card_id = id })
+        .execute(repo);
+    defer repo.free(result);
 
-    return repo.execute(query);
+    return if (result) |_|
+        true
+    else
+        false;
+}
+
+fn printPrice(writer: *std.Io.Writer, pricing: sdk.Pricing) !bool {
+    const cardmarket = if (pricing.cardmarket) |cardmarket|
+        cardmarket
+    else
+        return false;
+
+    if (cardmarket.trend) |trend| {
+        try writer.print("{d}", .{trend});
+    } else {
+        try writer.print("???", .{});
+    }
+
+    try writer.print("{s}", .{cardmarket.unit orelse ""});
+
+    return true;
 }
 
 fn innerMain(ctx: *Context) !u8 {
@@ -62,24 +89,37 @@ fn innerMain(ctx: *Context) !u8 {
                 return 1;
             };
 
-            var missing: MissingIterator = try .create(ctx.allocator, &ctx.repo, name);
+            var missing: MissingIterator = try .create(ctx.allocator, &ctx.repo, .{
+                .where = &.{
+                    .like(.name, name),
+                }
+            });
             defer missing.destroy();
 
             while (try missing.next()) |card| {
                 const pokemon = unwrapPokemon(card) catch |e| switch (e) {
                     error.NonPokemonCard => {
-                        try notAPokemon(ctx.stderr);
+                        try ctx.stderr.print("found a non-Pokemon card\n", .{});
                         return 1;
                     },
                     else => return e,
                 };
 
-                try ctx.stdout.print("{s} {s} - ", .{ pokemon.set.name, pokemon.localId });
+                try ctx.stdout.print("{s} ({s} {s}) [{s}] - ", .{
+                    pokemon.name,
+                    pokemon.set.name,
+                    pokemon.localId,
+                    pokemon.id,
+                });
 
-                try utils.printPrice(ctx.stdout, pokemon);
+                if (pokemon.pricing) |pricing| {
+                    if (try printPrice(ctx.stdout, pricing)) {
+                        try ctx.stdout.print(" - ", .{});
+                    }
+                }
 
                 if (pokemon.image) |image| {
-                    try ctx.stdout.print(" - {f}", .{image});
+                    try ctx.stdout.print("{f}", .{image});
                 }
 
                 try ctx.stdout.writeByte('\n');
@@ -91,16 +131,21 @@ fn innerMain(ctx: *Context) !u8 {
                 return 1;
             };
 
-            if (!try isPokemon(ctx.allocator, id)) {
-                try notAPokemon(ctx.stderr);
+            if (try exists(&ctx.repo, id)) {
+                try ctx.stderr.print("card '{s}' already owned\n", .{id});
                 return 1;
             }
 
-            // TODO: check it doesn't exist already
-            const query = ctx.repo.Query(.Owned)
-                .insert(.{ .card_id = id });
+            validateCardId(ctx.allocator, ctx.stderr, id) catch |e| switch (e) {
+                error.NotACard,
+                error.NonPokemonCard,
+                => return 1,
+                else => return e,
+            };
 
-            try ctx.repo.execute(query);
+            try Query(.Owned)
+                .insert(.{ .card_id = id })
+                .execute(&ctx.repo);
 
             try ctx.stdout.print("added '{s}' to database\n", .{id});
         },
@@ -110,17 +155,22 @@ fn innerMain(ctx: *Context) !u8 {
                 return 1;
             };
 
-            if (!try isPokemon(ctx.allocator, id)) {
-                try notAPokemon(ctx.stderr);
+            if (!try exists(&ctx.repo, id)) {
+                try ctx.stderr.print("card '{s}' is not owned\n", .{id});
                 return 1;
             }
 
-            // TODO: check it already exists
-            const query = ctx.repo.Query(.Owned)
-                .delete()
-                .where(.{ .card_id = id });
+            validateCardId(ctx.allocator, ctx.stderr, id) catch |e| switch (e) {
+                error.NotACard,
+                error.NonPokemonCard,
+                => return 1,
+                else => return e,
+            };
 
-            try ctx.repo.execute(query);
+            try Query(.Owned)
+                .delete()
+                .where(.{ .card_id = id })
+                .execute(&ctx.repo);
 
             try ctx.stdout.print("removed '{s}' from database\n", .{id});
         },
@@ -138,9 +188,11 @@ pub fn main() !u8 {
     const stderr = &stderr_fw.interface;
     defer stderr.flush() catch {};
 
+    // TODO: find some other (faster) allocator to use
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
+    // TODO: find and fix leaks, rather than using an arena
     var arena: std.heap.ArenaAllocator = .init(gpa.allocator());
     defer arena.deinit();
 
@@ -154,15 +206,7 @@ pub fn main() !u8 {
         return 1;
     };
 
-    var repo: database.Repo = try .init(allocator, .{
-        // default initializer:
-        //   - reads user and password from env (JETQUERY_*)
-        //   - uses default port (5432)
-        //   - sets other params to default values
-        .adapter = .{
-            .database = "collector",
-        },
-    });
+    var repo = try database.initRepo(allocator);
     defer repo.deinit();
 
     var ctx: Context = .{

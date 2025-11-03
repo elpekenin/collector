@@ -13,8 +13,8 @@
             .hash = "jetquery-0.0.0-TNf3zuTABgCuCBZIaRndYQNCXHgiLa8lm97pK9Kaujzk",
         },
         .ptz = .{
-            .url = "git+https://github.com/elpekenin/ptz#e4b48658af0759f4011c1d3cb1506972334b4b5b",
-            .hash = "ptz-0.0.1-CesFmpvOAACa--jddApH6E5VRxJpGqqLWv82KN5TMIxa",
+            .url = "git+https://github.com/elpekenin/ptz#8d673e76022cc34da3b8d344aa6de85c690c19ec",
+            .hash = "ptz-0.0.1-CesFmmLRAAAJkdWg-Xr-DFr0SA7_OCGXb0rHuY8jysKW",
         },
     },
     .paths = .{

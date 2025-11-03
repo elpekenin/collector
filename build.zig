@@ -6,23 +6,24 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // deps
-    const args = b.dependency("args", .{});
-    const jetquery = b.dependency("jetquery", .{});
-    const ptz = b.dependency("ptz", .{});
+    const dep_args = .{ .target = target, .optimize = optimize };
+    const args = b.dependency("args", dep_args);
+    const jetquery = b.dependency("jetquery", dep_args);
+    const ptz = b.dependency("ptz", dep_args);
 
     // exe
-    const root_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    root_module.addImport("args", args.module("args"));
-    root_module.addImport("jetquery", jetquery.module("jetquery"));
-    root_module.addImport("ptz", ptz.module("ptz"));
-
     const exe = b.addExecutable(.{
         .name = "collector",
-        .root_module = root_module,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "args", .module = args.module("args") },
+                .{ .name = "jetquery", .module = jetquery.module("jetquery") },
+                .{ .name = "ptz", .module = ptz.module("ptz") },
+            }
+        }),
         // for debug-ability
         .use_lld = true,
         .use_llvm = true,

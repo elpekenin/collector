@@ -24,18 +24,16 @@ repo: *database.Repo,
 data: Data,
 state: State,
 
-pub fn create(allocator: std.mem.Allocator, repo: *database.Repo, name: []const u8) !MissingIterator {
+pub fn create(
+    allocator: std.mem.Allocator,
+    repo: *database.Repo,
+    params: sdk.Iterator(sdk.Card.Brief).Params,
+) !MissingIterator {
     const owned = try database.getOwned(allocator, repo);
 
-    var iterator: sdk.Iterator(sdk.Card.Brief) = .new(.{
-        .where = &.{
-            .like(.name, name),
-        },
-    });
+    var iterator: sdk.Iterator(sdk.Card.Brief) = .init(allocator, params);
 
-    const briefs = try iterator.next(allocator) orelse {
-        return error.NoCardsFound;
-    };
+    const briefs = try iterator.next() orelse return error.NoCardsFound;
 
     return .{
         .allocator = allocator,
@@ -53,13 +51,16 @@ pub fn create(allocator: std.mem.Allocator, repo: *database.Repo, name: []const 
 
 fn advanceBriefs(self: *MissingIterator, i: usize) !void {
     if (self.state.briefs) |briefs| {
-        if (briefs.len > i) {
-            self.state.briefs = briefs[i + 1 ..];
+        if (briefs.len >= i) {
+            self.state.iterator.free(briefs[0..i]);
+            self.state.briefs = briefs[i..];
             return;
         }
+
+        self.state.iterator.free(briefs);
     }
 
-    self.state.briefs = try self.state.iterator.next(self.allocator);
+    self.state.briefs = try self.state.iterator.next();
 }
 
 fn isFromSerie(brief: sdk.Card.Brief, tcgp: sdk.Serie) bool {
@@ -72,7 +73,7 @@ fn isFromSerie(brief: sdk.Card.Brief, tcgp: sdk.Serie) bool {
     return false;
 }
 
-fn isOwned(self: *const MissingIterator, card_id: []const u8) bool {
+fn alreadyOwned(self: *const MissingIterator, card_id: []const u8) bool {
     for (self.data.owned) |item| {
         if (std.mem.eql(u8, card_id, item.card_id)) {
             return true;
@@ -85,15 +86,14 @@ fn isOwned(self: *const MissingIterator, card_id: []const u8) bool {
 pub fn next(self: *MissingIterator) !?sdk.Card {
     const briefs = self.state.briefs orelse return null;
 
-    for (briefs, 0..) |brief, i| {
-        if (isFromSerie(brief, self.data.tcgp)) continue;
-        if (self.isOwned(brief.id)) continue;
+    for (briefs, 1..) |brief, i| {
+        if (isFromSerie(brief, self.data.tcgp) or self.alreadyOwned(brief.id)) continue;
+
+        const card: sdk.Card = try .get(self.allocator, .{ .id = brief.id });
 
         try self.advanceBriefs(i);
 
-        return try .get(self.allocator, .{
-            .id = brief.id,
-        });
+        return card;
     }
 
     // nothing matched, try again by resetting briefs
