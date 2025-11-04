@@ -8,13 +8,13 @@
             .url = "git+https://github.com/ikskuh/zig-args#8ae26b44a884ff20dca98ee84c098e8f8e94902f",
             .hash = "args-0.0.0-CiLiqojRAACGzDRO7A9dw7kWSchNk29caJZkXuMCb0Cn",
         },
-        .jetquery = .{
-            .url = "git+https://github.com/jetzig-framework/jetquery#0268accfbc299fd888546f720a5424dad9da2eb4",
-            .hash = "jetquery-0.0.0-TNf3zuTABgCuCBZIaRndYQNCXHgiLa8lm97pK9Kaujzk",
-        },
         .ptz = .{
             .url = "git+https://github.com/elpekenin/ptz#ff4f996fe19555b5e6a1732d7fb611b080552462",
             .hash = "ptz-0.0.1-CesFmmjRAABT3QTMc8rR7MbSo_2iBvDzZ8lwN3spbT-q",
+        },
+        .zqlite = .{
+            .url = "git+https://github.com/karlseguin/zqlite.zig#e3b6972230ccb1d2069e1ff298699d73b3180b3c",
+            .hash = "zqlite-0.0.0-RWLaY-C4mADQvgmoLhHD-cHtCgKYdQNAoqASip2uJzBL",
         },
     },
     .paths = .{

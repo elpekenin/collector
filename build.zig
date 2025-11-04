@@ -5,11 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // deps
     const dep_args = .{ .target = target, .optimize = optimize };
+
+    // deps
     const args = b.dependency("args", dep_args);
-    const jetquery = b.dependency("jetquery", dep_args);
     const ptz = b.dependency("ptz", dep_args);
+    const zqlite = b.dependency("zqlite", dep_args);
 
     // exe
     const exe = b.addExecutable(.{
@@ -20,8 +21,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "args", .module = args.module("args") },
-                .{ .name = "jetquery", .module = jetquery.module("jetquery") },
                 .{ .name = "ptz", .module = ptz.module("ptz") },
+                .{ .name = "zqlite", .module = zqlite.module("zqlite") },
             }
         }),
         // for debug-ability

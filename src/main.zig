@@ -3,23 +3,23 @@ const std = @import("std");
 const sdk = @import("ptz").Sdk(.en);
 
 const cli = @import("cli.zig");
-const database = @import("database.zig");
+const db = @import("db.zig");
 const MissingIterator = @import("MissingIterator.zig");
-
-const Query = database.Query;
 
 const Context = struct {
     allocator: std.mem.Allocator,
-    args: cli.Args,
-    repo: database.Repo,
+    command: cli.Command,
+    conn: db.Connection,
     stderr: *std.Io.Writer,
     stdout: *std.Io.Writer,
 };
 
-const Error = error{NonPokemonCard};
+const Error = error{
+    NonPokemonCard,
+};
 
 fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
-    try stderr.print("missing argument '--{s}'\n", .{arg});
+    try stderr.print("error: missing argument '--{s}'\n", .{arg});
 }
 
 /// Get the Pokemon payload from a Card, otherwise error
@@ -30,13 +30,12 @@ fn unwrapPokemon(card: sdk.Card) Error!sdk.Card.Pokemon {
     };
 }
 
-/// Check that this id represents a Pokemon card
 fn validateCardId(allocator: std.mem.Allocator, stderr: *std.Io.Writer, id: []const u8) !void {
     const card = sdk.Card.get(allocator, .{
         .id = id,
     }) catch |e| switch (e) {
         error.ServerErrorStatus => {
-            try stderr.print("card '{s}' does not exist\n", .{id});
+            try stderr.print("error: card '{s}' does not exist\n", .{id});
             return error.NotACard;
         },
         else => return e,
@@ -45,22 +44,10 @@ fn validateCardId(allocator: std.mem.Allocator, stderr: *std.Io.Writer, id: []co
 
     _ = unwrapPokemon(card) catch |e| switch (e) {
         error.NonPokemonCard => {
-            try stderr.print("card '{s}' is not a Pokemon\n", .{id});
+            try stderr.print("error: card '{s}' is not a Pokemon\n", .{id});
             return e;
         },
     };
-}
-
-fn exists(repo: *database.Repo, id: []const u8) !bool {
-    const result = try Query(.Owned)
-        .findBy(.{ .card_id = id })
-        .execute(repo);
-    defer repo.free(result);
-
-    return if (result) |_|
-        true
-    else
-        false;
 }
 
 fn printPrice(writer: *std.Io.Writer, pricing: sdk.Pricing) !bool {
@@ -81,25 +68,24 @@ fn printPrice(writer: *std.Io.Writer, pricing: sdk.Pricing) !bool {
 }
 
 fn innerMain(ctx: *Context) !u8 {
-    switch (ctx.args) {
-        .init => try database.createDb(&ctx.repo),
+    switch (ctx.command) {
         .ls => |args| {
             const name = args.name orelse {
                 try missingArg(ctx.stderr, "name");
                 return 1;
             };
 
-            var missing: MissingIterator = try .create(ctx.allocator, &ctx.repo, .{
+            var missing: MissingIterator = try .create(ctx.allocator, &ctx.conn, .{
                 .where = &.{
                     .like(.name, name),
-                }
+                },
             });
             defer missing.destroy();
 
             while (try missing.next()) |card| {
                 const pokemon = unwrapPokemon(card) catch |e| switch (e) {
                     error.NonPokemonCard => {
-                        try ctx.stderr.print("found a non-Pokemon card\n", .{});
+                        try ctx.stderr.print("error: found a non-Pokemon card\n", .{});
                         return 1;
                     },
                     else => return e,
@@ -131,8 +117,8 @@ fn innerMain(ctx: *Context) !u8 {
                 return 1;
             };
 
-            if (try exists(&ctx.repo, id)) {
-                try ctx.stderr.print("card '{s}' already owned\n", .{id});
+            if (try db.isOwned(&ctx.conn, id)) {
+                try ctx.stderr.print("warn: card '{s}' already owned\n", .{id});
                 return 1;
             }
 
@@ -143,9 +129,7 @@ fn innerMain(ctx: *Context) !u8 {
                 else => return e,
             };
 
-            try Query(.Owned)
-                .insert(.{ .card_id = id })
-                .execute(&ctx.repo);
+            try db.addOwned(&ctx.conn, id);
 
             try ctx.stdout.print("added '{s}' to database\n", .{id});
         },
@@ -155,8 +139,8 @@ fn innerMain(ctx: *Context) !u8 {
                 return 1;
             };
 
-            if (!try exists(&ctx.repo, id)) {
-                try ctx.stderr.print("card '{s}' is not owned\n", .{id});
+            if (!try db.isOwned(&ctx.conn, id)) {
+                try ctx.stderr.print("warn: card '{s}' is not owned\n", .{id});
                 return 1;
             }
 
@@ -167,12 +151,9 @@ fn innerMain(ctx: *Context) !u8 {
                 else => return e,
             };
 
-            try Query(.Owned)
-                .delete()
-                .where(.{ .card_id = id })
-                .execute(&ctx.repo);
+            try db.removeOwned(&ctx.conn, id);
 
-            try ctx.stdout.print("removed '{s}' from database\n", .{id});
+            try ctx.stdout.print("info: removed '{s}' from database\n", .{id});
         },
     }
 
@@ -201,18 +182,45 @@ pub fn main() !u8 {
     const result = try cli.parseArgs(allocator);
     defer result.deinit();
 
-    const args = result.verb orelse {
-        try stderr.print("must specify an operation\n", .{});
+    const command = result.verb orelse {
+        try stderr.print("error: must specify a command\n", .{});
         return 1;
     };
 
-    var repo = try database.initRepo(allocator);
-    defer repo.deinit();
+    // allow user to use a custom directory (or default to OS-specific data dir)
+    // however, the filename is hardcoded
+    const dir_path: []const u8, const needs_free = if (result.options.db_dir) |dir|
+        .{ dir, false }
+    else
+        .{ try std.fs.getAppDataDir(allocator, "collector"), true };
+
+    defer if (needs_free) allocator.free(dir_path);
+
+    const absolute_path = try std.fs.path.resolve(allocator, &.{dir_path});
+    defer allocator.free(absolute_path);
+
+    std.fs.accessAbsolute(absolute_path, .{}) catch |e| switch (e) {
+        error.FileNotFound => {
+            try std.fs.makeDirAbsolute(absolute_path);
+            try stdout.print("info: created directory '{s}' for data storage\n", .{absolute_path});
+        },
+        else => return e,
+    };
+
+    const path = try std.fs.path.joinZ(allocator, &.{ dir_path, "db.sqlite3" });
+    defer allocator.free(path);
+
+    const conn = try db.connect(.{
+        .path = path,
+    });
+    defer conn.close();
+
+    try stdout.print("debug: database at '{s}'\n", .{path});
 
     var ctx: Context = .{
         .allocator = allocator,
-        .args = args,
-        .repo = repo,
+        .conn = conn,
+        .command = command,
         .stderr = stderr,
         .stdout = stdout,
     };

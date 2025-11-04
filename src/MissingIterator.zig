@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const database = @import("database.zig");
+const db = @import("db.zig");
 const Owned = @import("Owned.zig");
 
 const sdk = @import("ptz").Sdk(.en);
@@ -20,16 +20,16 @@ const State = struct {
 };
 
 allocator: std.mem.Allocator,
-repo: *database.Repo,
+conn: *db.Connection,
 data: Data,
 state: State,
 
 pub fn create(
     allocator: std.mem.Allocator,
-    repo: *database.Repo,
+    conn: *db.Connection,
     params: sdk.Iterator(sdk.Card.Brief).Params,
 ) !MissingIterator {
-    const owned = try database.getOwned(allocator, repo);
+    const owned = try db.allOwned(allocator, conn);
 
     var iterator: sdk.Iterator(sdk.Card.Brief) = .init(allocator, params);
 
@@ -37,7 +37,7 @@ pub fn create(
 
     return .{
         .allocator = allocator,
-        .repo = repo,
+        .conn = conn,
         .data = .{
             .owned = owned,
             .tcgp = try .get(allocator, .{ .id = "tcgp" }),
