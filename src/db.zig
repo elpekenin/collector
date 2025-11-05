@@ -3,7 +3,9 @@ const std = @import("std");
 const zqlite = @import("zqlite");
 pub const Connection = zqlite.Conn;
 
-const Owned = @import("Owned.zig");
+const Owned = struct {
+    card_id: []const u8,
+};
 
 const Options = struct {
     path: [:0]const u8,
@@ -33,7 +35,7 @@ pub fn addOwned(conn: *Connection, id: []const u8) !void {
     try conn.exec("INSERT INTO owned (card_id) VALUES (?1)", .{id});
 }
 
-pub fn removeOwned(conn: *Connection, id: []const u8) !void {
+pub fn rmOwned(conn: *Connection, id: []const u8) !void {
     try conn.exec("DELETE FROM owned WHERE card_id=?1", .{id});
 }
 

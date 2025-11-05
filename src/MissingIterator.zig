@@ -3,14 +3,12 @@
 const std = @import("std");
 
 const db = @import("db.zig");
-const Owned = @import("Owned.zig");
 
 const sdk = @import("ptz").Sdk(.en);
 
 const MissingIterator = @This();
 
 const Data = struct {
-    owned: []const Owned,
     tcgp: sdk.Serie,
 };
 
@@ -29,8 +27,6 @@ pub fn create(
     conn: *db.Connection,
     params: sdk.Iterator(sdk.Card.Brief).Params,
 ) !MissingIterator {
-    const owned = try db.allOwned(allocator, conn);
-
     var iterator: sdk.Iterator(sdk.Card.Brief) = .init(allocator, params);
 
     const briefs = try iterator.next() orelse return error.NoCardsFound;
@@ -39,7 +35,6 @@ pub fn create(
         .allocator = allocator,
         .conn = conn,
         .data = .{
-            .owned = owned,
             .tcgp = try .get(allocator, .{ .id = "tcgp" }),
         },
         .state = .{
@@ -73,21 +68,11 @@ fn isFromSerie(brief: sdk.Card.Brief, tcgp: sdk.Serie) bool {
     return false;
 }
 
-fn alreadyOwned(self: *const MissingIterator, card_id: []const u8) bool {
-    for (self.data.owned) |item| {
-        if (std.mem.eql(u8, card_id, item.card_id)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 pub fn next(self: *MissingIterator) !?sdk.Card {
     const briefs = self.state.briefs orelse return null;
 
     for (briefs, 1..) |brief, i| {
-        if (isFromSerie(brief, self.data.tcgp) or self.alreadyOwned(brief.id)) continue;
+        if (isFromSerie(brief, self.data.tcgp) or try db.isOwned(self.conn, brief.id)) continue;
 
         const card: sdk.Card = try .get(self.allocator, .{ .id = brief.id });
 
@@ -103,5 +88,5 @@ pub fn next(self: *MissingIterator) !?sdk.Card {
 }
 
 pub fn destroy(self: *MissingIterator) void {
-    self.allocator.free(self.data.owned);
+    _ = self;
 }

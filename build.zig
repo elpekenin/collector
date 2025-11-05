@@ -8,8 +8,8 @@ pub fn build(b: *std.Build) void {
     const dep_args = .{ .target = target, .optimize = optimize };
 
     // deps
-    const args = b.dependency("args", dep_args);
     const ptz = b.dependency("ptz", dep_args);
+    const vaxis = b.dependency("vaxis", dep_args);
     const zqlite = b.dependency("zqlite", dep_args);
 
     // exe
@@ -20,8 +20,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "args", .module = args.module("args") },
                 .{ .name = "ptz", .module = ptz.module("ptz") },
+                .{ .name = "vaxis", .module = vaxis.module("vaxis") },
                 .{ .name = "zqlite", .module = zqlite.module("zqlite") },
             }
         }),
@@ -33,11 +33,5 @@ pub fn build(b: *std.Build) void {
 
     // run step
     const run = b.step("run", "run the tool");
-
-    const cmd = b.addRunArtifact(exe);
-    if (b.args) |run_args| {
-        cmd.addArgs(run_args);
-    }
-
-    run.dependOn(&cmd.step);
+    run.dependOn(&b.addRunArtifact(exe).step);
 }
