@@ -135,7 +135,7 @@ pub fn run(ctx: *Ctx) !u8 {
             },
 
             .missing,
-            .owned,
+            .owned, // TODO?: iterate database rows instead of API?
             => {
                 const owned = command == .owned;
 
@@ -163,11 +163,25 @@ pub fn run(ctx: *Ctx) !u8 {
                 var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
                 defer arena.deinit();
 
-                var empty = true;
+                var something_found = false;
 
                 iterator_loop: while (try iterator.next()) |briefs| {
-                    card_loop: for (briefs) |brief| {
+                    for (briefs) |brief| {
                         if (isFromSerie(brief, tcgp)) continue;
+
+                        const card: sdk.Card = try .get(ctx.allocator, .{
+                            .id = brief.id,
+                        });
+
+                        const pokemon = switch (card) {
+                            .pokemon => |pokemon| pokemon,
+                            else => {
+                                try repl.warn(&.{"found a non-pokemon card"});
+                                continue;
+                            },
+                        };
+
+                        var variant_listed = false;
 
                         for (std.enums.values(Variant)) |variant| {
                             // allow to break loop with Ctrl+C
@@ -188,51 +202,53 @@ pub fn run(ctx: *Ctx) !u8 {
                                 }
                             }
 
+                            if (!variantExists(pokemon, variant)) continue;
                             if (try db.isOwned(&ctx.conn, brief.id, variant) != owned) continue;
 
-                            const card: sdk.Card = try .get(ctx.allocator, .{
-                                .id = brief.id,
-                            });
+                            something_found = true;
 
-                            const pokemon = switch (card) {
-                                .pokemon => |pokemon| if (variantExists(pokemon, variant))
-                                    pokemon
-                                else
-                                    continue,
-                                else => {
-                                    try repl.warn(&.{"found a non-pokemon card"});
-                                    continue :card_loop;
-                                },
-                            };
+                            if (!variant_listed) {
+                                variant_listed = true;
 
-                            empty = false;
+                                var allocating: std.Io.Writer.Allocating = .init(arena.allocator());
+                                const writer = &allocating.writer;
 
-                            var allocating: std.Io.Writer.Allocating = .init(arena.allocator());
-                            const writer = &allocating.writer;
+                                const link: vaxis.Cell.Hyperlink = if (pokemon.image) |image| link: {
+                                    try image.toUrl(writer, .high, .jpg);
+                                    break :link .{ .uri = try allocating.toOwnedSlice() };
+                                } else .{};
 
-                            const link: vaxis.Cell.Hyperlink = if (pokemon.image) |image| link: {
-                                try image.toUrl(writer, .high, .jpg);
-                                break :link .{ .uri = try allocating.toOwnedSlice() };
-                            } else .{};
+                                try repl.addLine();
+                                try repl.print(&.{
+                                    .{ .text = "[" },
+                                    .{ .text = pokemon.id },
+                                    .{ .text = "] " },
+                                    .{ .text = pokemon.name, .link = link },
+                                    .{ .text = " (" },
+                                    .{ .text = @tagName(variant) },
+                                });
 
-                            try repl.addLine();
+                                continue;
+                            }
+
                             try repl.print(&.{
-                                .{ .text = "[" },
-                                .{ .text = pokemon.id },
-                                .{ .text = "] " },
-                                .{ .text = pokemon.name, .link = link },
-                                .{ .text = " (" },
+                                .{ .text = " " },
                                 .{ .text = @tagName(variant) },
-                                .{ .text = ") " },
                             });
-
-                            // render on each card, so that screen is not frozen
-                            try repl.render();
                         }
+
+                        if (variant_listed) {
+                            try repl.print(&.{
+                                .{ .text = ")" },
+                            });
+                        }
+
+                        // render on each card, so that screen is not frozen
+                        try repl.render();
                     }
                 }
 
-                if (empty) {
+                if (!something_found) {
                     try repl.warn(&.{"nothing found"});
                     continue;
                 }
