@@ -28,7 +28,7 @@ const Command = enum {
 
 fn isFromSerie(brief: sdk.Card.Brief, serie: sdk.Serie) bool {
     for (serie.sets) |set| {
-        if (std.mem.eql(u8, brief.id, set.id)) {
+        if (std.mem.startsWith(u8, brief.id, set.id)) {
             return true;
         }
     }
