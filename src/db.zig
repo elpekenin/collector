@@ -42,7 +42,7 @@ pub fn addOwned(conn: *Connection, id: []const u8, variant: Owned.VariantEnum) !
 
 pub fn rmOwned(conn: *Connection, id: []const u8, variant: Owned.VariantEnum) !void {
     try conn.exec(
-        "DELETE FROM owned WHERE card_id=?1",
+        "DELETE FROM owned WHERE card_id=?1 AND variant=?2",
         .{ id, @tagName(variant) },
     );
 }

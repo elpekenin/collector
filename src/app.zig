@@ -296,7 +296,7 @@ pub fn run(ctx: *Ctx) !u8 {
                     .pokemon => |pokemon| if (variantExists(pokemon, variant))
                         pokemon
                     else {
-                        try repl.err(&.{ id, "(", pokemon.name, ") has no ", variant_raw, " variant" });
+                        try repl.err(&.{ pokemon.name, "(", id, ") has no ", variant_raw, " variant" });
                         continue;
                     },
                     else => {
@@ -312,7 +312,7 @@ pub fn run(ctx: *Ctx) !u8 {
                 }
 
                 const msg = if (adding) "added " else "removed ";
-                try repl.success(&.{ msg, pokemon.name, " (", id, ")" });
+                try repl.success(&.{ msg, pokemon.name, " (", id, ") ", variant_raw });
             },
         }
     }
