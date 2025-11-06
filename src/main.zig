@@ -3,8 +3,8 @@ const std = @import("std");
 const sdk = @import("ptz").Sdk(.en);
 
 const db = @import("db.zig");
-const repl = @import("repl.zig");
-const App = @import("App.zig");
+const app = @import("app.zig");
+const Ctx = @import("Ctx.zig");
 const MissingIterator = @import("MissingIterator.zig");
 
 fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
@@ -52,12 +52,12 @@ pub fn main() !u8 {
     });
     defer conn.close();
 
-    var app: App = .{
+    var ctx: Ctx = .{
         .allocator = allocator,
         .conn = conn,
         .stderr = stderr,
         .stdout = stdout,
     };
 
-    return repl.run(&app);
+    return app.run(&ctx);
 }

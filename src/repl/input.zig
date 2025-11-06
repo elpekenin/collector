@@ -12,7 +12,7 @@ const Result = union(enum) {
 fn ctrlCombinations(repl: *Repl, key: Key) Result {
     if (!key.mods.ctrl) return .noop;
 
-    const empty_input = repl.text.buf.realLength() == 0;
+    const empty_input = repl.input.buf.buf.realLength() == 0;
 
     // Ctrl+D + empty input => exit
     if (key.codepoint == 'd') {
@@ -26,7 +26,7 @@ fn ctrlCombinations(repl: *Repl, key: Key) Result {
     // Ctrl+C => clear input
     if (key.codepoint == 'c') {
         if (!empty_input) {
-            repl.text.clearRetainingCapacity();
+            repl.input.buf.clearRetainingCapacity();
             return .done;
         }
 
@@ -39,9 +39,9 @@ fn ctrlCombinations(repl: *Repl, key: Key) Result {
 fn arrows(repl: *Repl, key: Key) Result {
     if (key.codepoint == Key.left) {
         if (key.mods.ctrl) {
-            repl.text.moveBackwardWordwise();
+            repl.input.buf.moveBackwardWordwise();
         } else {
-            repl.text.cursorLeft();
+            repl.input.buf.cursorLeft();
         }
 
         return .done;
@@ -49,9 +49,9 @@ fn arrows(repl: *Repl, key: Key) Result {
 
     if (key.codepoint == Key.right) {
         if (key.mods.ctrl) {
-            repl.text.moveForwardWordwise();
+            repl.input.buf.moveForwardWordwise();
         } else {
-            repl.text.cursorRight();
+            repl.input.buf.cursorRight();
         }
 
         return .done;
@@ -63,9 +63,9 @@ fn arrows(repl: *Repl, key: Key) Result {
 fn deletion(repl: *Repl, key: Key) Result {
     if (key.codepoint == Key.backspace) {
         if (key.mods.ctrl) {
-            repl.text.deleteWordBefore();
+            repl.input.buf.deleteWordBefore();
         } else {
-            repl.text.deleteBeforeCursor();
+            repl.input.buf.deleteBeforeCursor();
         }
 
         return .done;
@@ -73,9 +73,9 @@ fn deletion(repl: *Repl, key: Key) Result {
 
     if (key.codepoint == Key.delete) {
         if (key.mods.ctrl) {
-            repl.text.deleteWordAfter();
+            repl.input.buf.deleteWordAfter();
         } else {
-            repl.text.deleteAfterCursor();
+            repl.input.buf.deleteAfterCursor();
         }
 
         return .done;

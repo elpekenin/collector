@@ -54,3 +54,7 @@ pub fn allOwned(allocator: std.mem.Allocator, conn: *Connection) ![]const Owned 
 
     return owned.toOwnedSlice(allocator);
 }
+
+pub fn filename(conn: *Connection) [*c]const u8 {
+    return zqlite.c.sqlite3_db_filename(@ptrCast(conn.conn), null);
+}

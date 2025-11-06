@@ -1,12 +1,19 @@
+//! Common logic provided by any REPL application
+//!
+//! AKA: Tiny wrapper around vaxis' event loop, handling Ctrl+C, Ctrl+D, arrows, appending input, ...
+//!
+//! Will yield back to user upon exit request or end of user input (enter key pressed)
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const vaxis = @import("vaxis");
 
 const utils = @import("../utils.zig");
-const input = @import("input.zig");
-const History = @import("History.zig");
+const in = @import("input.zig");
+const Line = @import("Line.zig");
 const Position = @import("Position.zig");
+const TextBuffer = @import("TextBuffer.zig");
 
 const Repl = @This();
 
@@ -23,11 +30,22 @@ pub const UserFacingEvent = union(enum) {
     input: []const u8,
 };
 
+pub const styles = struct {
+    pub const green: vaxis.Style = .{ .fg = .{ .rgb = .{ 0, 255, 0 } } };
+    pub const orange: vaxis.Style = .{ .fg = .{ .rgb = .{ 255, 165, 0 } } };
+    pub const red: vaxis.Style = .{ .fg = .{ .rgb = .{ 255, 0, 0 } } };
+};
+
 allocator: Allocator,
-history: History,
+/// temporary message to be shown below input
+hint: ?Line,
+/// input status (what's written and where)
+input: struct {
+    buf: vaxis.widgets.TextInput,
+    line: u16,
+},
 loop: Loop,
-pos: Position,
-text: vaxis.widgets.TextInput,
+text_buffer: TextBuffer,
 tty: vaxis.Tty,
 vx: vaxis.Vaxis,
 win: vaxis.Window,
@@ -36,10 +54,13 @@ win: vaxis.Window,
 pub fn create(allocator: Allocator) Repl {
     return .{
         .allocator = allocator,
-        .history = .empty,
+        .hint = null,
+        .input = .{
+            .line = 0,
+            .buf = .init(allocator),
+        },
         .loop = undefined,
-        .pos = .zero,
-        .text = .init(allocator),
+        .text_buffer = .empty,
         .tty = undefined,
         .vx = undefined,
         .win = undefined,
@@ -47,13 +68,9 @@ pub fn create(allocator: Allocator) Repl {
 }
 
 pub fn init(self: *Repl, buffer: []u8) !void {
-    errdefer self.text.deinit();
-
     self.tty = try .init(buffer);
-    errdefer self.tty.deinit();
 
     self.vx = try vaxis.init(self.allocator, .{});
-    errdefer self.vx.deinit(self.allocator, self.tty.writer());
 
     self.win = self.vx.window();
 
@@ -64,88 +81,163 @@ pub fn init(self: *Repl, buffer: []u8) !void {
     try self.loop.init();
 
     try self.loop.start();
-    errdefer self.loop.stop();
 
     try self.vx.enterAltScreen(self.tty.writer());
     try self.vx.queryTerminal(self.tty.writer(), std.time.ns_per_s);
+
+    try self.newPrompt();
 }
 
 pub fn destroy(self: *Repl) void {
-    self.text.deinit();
+    self.input.buf.deinit();
     self.loop.stop();
     self.vx.deinit(self.allocator, self.tty.writer());
     self.tty.deinit();
 }
 
-// TODO: make full rendering based on history
+pub fn newPrompt(self: *Repl) Allocator.Error!void {
+    try self.addLine();
+
+    const entry = self.text_buffer.lastEntry();
+    entry.input = true;
+
+    try entry.line.append(self.allocator, .{
+        .text = "collector>",
+        .style = .{ .bold = true },
+    });
+
+    self.input.line = @intCast(self.text_buffer.entries.items.len - 1);
+
+    if (self.hint) |message| {
+        message.deinit(self.allocator);
+    }
+
+    self.hint = null;
+}
+
+pub fn clear(self: *Repl) Allocator.Error!void {
+    for (0..self.win.height) |_| {
+        try self.addLine();
+    }
+
+    try self.newPrompt();
+}
+
 pub fn render(self: *Repl) !void {
+    self.win.clear();
+
+    var pos: Position = .zero;
+    for (self.text_buffer.entries.items, 0..) |entry, i| {
+        const res = self.win.print(entry.line.segments.items, pos.toOptions());
+        pos.set(res);
+
+        if (self.input.line == i) {
+            const first = self.win.print(
+                &.{
+                    .{ .text = self.input.buf.buf.firstHalf() },
+                },
+                pos.toOptions(),
+            );
+            pos.set(first);
+
+            self.win.showCursor(first.col, first.row);
+
+            const second = self.win.print(
+                &.{
+                    .{ .text = self.input.buf.buf.secondHalf() },
+                },
+                pos.toOptions(),
+            );
+            pos.set(second);
+        }
+
+        pos.advanceLine();
+    }
+
+    // only show hint if there's nothing printed below
+    if (self.input.line == self.text_buffer.entries.items.len - 1) {
+        if (self.hint) |message| {
+            _ = self.win.print(message.segments.items, pos.toOptions());
+        }
+    }
+
     try self.vx.render(self.tty.writer());
 }
 
-pub fn advanceLine(self: *Repl) Allocator.Error!void {
-    self.pos.advanceLine();
-    _ = try self.history.addLine(self.allocator);
+pub fn addLine(self: *Repl) Allocator.Error!void {
+    // if input won't fit, remove previous items from history
+    if (self.win.height > 0 and self.text_buffer.entries.items.len >= self.win.height) {
+        const removed = self.text_buffer.popFirst();
+        removed.deinit(self.allocator);
+    }
+
+    try self.text_buffer.entries.append(self.allocator, .empty);
 }
 
-fn lastLine(self: *Repl) Allocator.Error!*History.Line {
-    return self.history.first() orelse try self.history.addLine(self.allocator);
-}
+/// add text to current line
+pub fn print(self: *Repl, segments: []const vaxis.Segment) Allocator.Error!void {
+    const line = self.text_buffer.lastLine();
 
-pub fn print(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.Error!void {
-    const line = try self.lastLine();
-
-    for (texts) |text| {
-        const copy = try line.append(self.allocator, text);
-
-        const res = self.win.print(
-            &.{
-                .{ .text = copy, .style = style },
-            },
-            self.pos.toOptions(),
-        );
-
-        self.pos.update(res);
+    for (segments) |segment| {
+        try line.append(self.allocator, segment);
     }
 }
 
-pub fn printLink(self: *Repl, texts: []const []const u8, link: vaxis.Cell.Hyperlink) Allocator.Error!void {
-    const line = try self.lastLine();
+/// create a new line and print to it
+pub fn printInNewLine(self: *Repl, segments: []const vaxis.Segment) Allocator.Error!void {
+    try self.addLine();
+    try self.print(segments);
+}
 
-    for (texts) |text| {
-        const copy = try line.append(self.allocator, text);
-
-        const res = self.win.print(
-            &.{
-                .{ .text = copy, .link = link },
-            },
-            self.pos.toOptions(),
-        );
-
-        self.pos.update(res);
+/// display a hint
+pub fn showHint(self: *Repl, texts: []const []const u8) Allocator.Error!void {
+    if (self.hint) |message| {
+        message.deinit(self.allocator);
     }
+
+    var hint: Line = .empty;
+    for (texts) |text| {
+        try hint.append(self.allocator, .{
+            .text = text,
+        });
+    }
+
+    self.hint = hint;
 }
 
-pub fn printInNewLine(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.Error!void {
-    try self.advanceLine();
-    try self.print(texts, style);
-    try self.advanceLine();
+pub fn storeInput(self: *Repl, input: []const u8) Allocator.Error!void {
+    try self.print(&.{
+        .{ .text = input },
+    });
+
+    const entry = self.text_buffer.lastEntry();
+    std.debug.assert(entry.input == true);
 }
 
-pub fn showPromptAndInput(self: *Repl) Allocator.Error!void {
-    self.pos.col = 0;
+fn output(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.Error!void {
+    try self.addLine();
 
-    try self.print(&.{"collector>"}, .{ .bold = true });
-    try self.print(&.{self.text.buf.firstHalf()}, .{});
-    self.win.showCursor(self.pos.col, self.pos.row);
-    try self.print(&.{self.text.buf.secondHalf()}, .{});
+    const line = self.text_buffer.lastLine();
+    for (texts) |text| {
+        try line.append(self.allocator, .{
+            .text = text,
+            .style = style,
+        });
+    }
+
+    try self.newPrompt();
+}
+
+pub fn success(self: *Repl, texts: []const []const u8) Allocator.Error!void {
+    return self.output(texts, styles.green);
 }
 
 pub fn warn(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    return self.printInNewLine(texts, .{ .fg = .{ .rgb = .{ 255, 165, 0 } } });
+    return self.output(texts, styles.orange);
 }
 
 pub fn err(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    return self.printInNewLine(texts, .{ .fg = .{ .rgb = .{ 255, 0, 0 } } });
+    return self.output(texts, styles.red);
 }
 
 /// takes care of rendering the window contents and restarting screen
@@ -154,17 +246,15 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
     const event = self.loop.nextEvent();
     switch (event) {
         .key_press => |key| {
-            for (input.handlers) |handler| {
+            for (in.handlers) |handler| {
                 switch (handler(self, key)) {
                     .noop => {},
                     .done => {
-                        try self.showPromptAndInput();
                         try self.render();
                         return null;
                     },
                     .hint => |hint| {
-                        try self.showPromptAndInput();
-                        try self.printInNewLine(&.{hint}, .{});
+                        try self.showHint(&.{hint});
                         try self.render();
                         return null;
                     },
@@ -177,23 +267,22 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
             // append to input
             if (key.codepoint != vaxis.Key.enter) {
                 if (key.text) |text| {
-                    try self.text.insertSliceAtCursor(text);
+                    try self.input.buf.insertSliceAtCursor(text);
                 }
 
-                try self.showPromptAndInput();
                 try self.render();
                 return null;
             }
 
             // defer input handling to the application
-            return .{ .input = try self.text.buf.toOwnedSlice() };
+            return .{ .input = try self.input.buf.toOwnedSlice() };
         },
         .winsize => |winsize| {
             try self.vx.resize(self.allocator, self.tty.writer(), winsize);
             self.win = self.vx.window();
 
             self.win.clear();
-            try self.showPromptAndInput();
+
             try self.render();
             return null;
         },

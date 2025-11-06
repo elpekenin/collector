@@ -19,7 +19,7 @@ pub fn advanceLine(self: *Position) void {
     self.row += 1;
 }
 
-pub fn update(self: *Position, res: vaxis.Window.PrintResult) void {
+pub fn set(self: *Position, res: vaxis.Window.PrintResult) void {
     self.col = res.col;
     self.row = res.row;
 }
