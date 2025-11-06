@@ -3,17 +3,16 @@ const std = @import("std");
 const zqlite = @import("zqlite");
 pub const Connection = zqlite.Conn;
 
-const Owned = struct {
-    card_id: []const u8,
-};
+const Owned = @import("Owned.zig");
 
 const Options = struct {
     path: [:0]const u8,
     flags: c_int = zqlite.OpenFlags.Create | zqlite.OpenFlags.EXResCode,
 };
 
+// TODO: migrations or something
 fn createDb(conn: *zqlite.Conn) !void {
-    try conn.exec("CREATE TABLE IF NOT EXISTS owned (card_id text)", .{});
+    try conn.exec("CREATE TABLE IF NOT EXISTS owned (card_id text, variant text)", .{});
 }
 
 pub fn connect(options: Options) !Connection {
@@ -24,19 +23,28 @@ pub fn connect(options: Options) !Connection {
     return conn;
 }
 
-pub fn isOwned(conn: *Connection, id: []const u8) !bool {
-    const row = try conn.row("SELECT * FROM owned WHERE card_id=?1", .{id}) orelse return false;
+pub fn isOwned(conn: *Connection, id: []const u8, variant: Owned.VariantEnum) !bool {
+    const row = try conn.row(
+        "SELECT * FROM owned WHERE card_id=?1 AND variant=?2",
+        .{ id, @tagName(variant) },
+    ) orelse return false;
     defer row.deinit();
 
     return true;
 }
 
-pub fn addOwned(conn: *Connection, id: []const u8) !void {
-    try conn.exec("INSERT INTO owned (card_id) VALUES (?1)", .{id});
+pub fn addOwned(conn: *Connection, id: []const u8, variant: Owned.VariantEnum) !void {
+    try conn.exec(
+        "INSERT INTO owned (card_id, variant) VALUES (?1, ?2)",
+        .{ id, @tagName(variant) },
+    );
 }
 
-pub fn rmOwned(conn: *Connection, id: []const u8) !void {
-    try conn.exec("DELETE FROM owned WHERE card_id=?1", .{id});
+pub fn rmOwned(conn: *Connection, id: []const u8, variant: Owned.VariantEnum) !void {
+    try conn.exec(
+        "DELETE FROM owned WHERE card_id=?1",
+        .{ id, @tagName(variant) },
+    );
 }
 
 pub fn allOwned(allocator: std.mem.Allocator, conn: *Connection) ![]const Owned {
@@ -49,6 +57,10 @@ pub fn allOwned(allocator: std.mem.Allocator, conn: *Connection) ![]const Owned 
     while (rows.next()) |row| {
         try owned.append(allocator, .{
             .card_id = row.text(0),
+            .variant = std.meta.stringToEnum(
+                Owned.VariantEnum,
+                row.text(1) orelse unreachable,
+            ),
         });
     }
 

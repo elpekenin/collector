@@ -1,30 +1,59 @@
 //! Interact with the database in a REPL
 
-// TODO:
-//   - parse user input
-//   - act accordingly
-//   - show image instead of link when kitty supported
-
 const std = @import("std");
+
+const sdk = @import("ptz").Sdk(.en);
 
 const vaxis = @import("vaxis");
 const Input = vaxis.widgets.TextInput;
 
 const db = @import("db.zig");
-const utils = @import("utils.zig");
 const Ctx = @import("Ctx.zig");
-const MissingIterator = @import("MissingIterator.zig");
+const Owned = @import("Owned.zig");
 const Repl = @import("repl/Repl.zig");
+
+const Variant = Owned.VariantEnum;
 
 const Command = enum {
     @"?",
-    add,
-    clear,
     db,
     exit,
-    ls,
+
+    add,
     rm,
+
+    owned,
+    missing,
 };
+
+fn isFromSerie(brief: sdk.Card.Brief, serie: sdk.Serie) bool {
+    for (serie.sets) |set| {
+        if (std.mem.eql(u8, brief.id, set.id)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn takeWord(reader: *std.Io.Reader) !?[]const u8 {
+    while (true) {
+        const word = try reader.takeDelimiter(' ') orelse return null;
+
+        if (word.len > 0) {
+            return word;
+        }
+    }
+}
+
+fn variantExists(pokemon: sdk.Card.Pokemon, variant: Variant) bool {
+    return switch (variant) {
+        .normal => pokemon.variants.normal,
+        .reverse => pokemon.variants.reverse,
+        .holo => pokemon.variants.holo,
+        .firstEdition => pokemon.variants.firstEdition,
+    };
+}
 
 pub fn run(ctx: *Ctx) !u8 {
     var buffer: [1024]u8 = undefined;
@@ -51,7 +80,7 @@ pub fn run(ctx: *Ctx) !u8 {
         const reader = &r;
 
         // on empty line, do nothing
-        const str = try utils.takeWord(reader) orelse {
+        const str = try takeWord(reader) orelse {
             try repl.newPrompt();
             continue;
         };
@@ -62,25 +91,8 @@ pub fn run(ctx: *Ctx) !u8 {
         };
 
         switch (command) {
-            .exit => {
-                if (try utils.takeWord(reader)) |_| {
-                    try repl.err(&.{"too many args"});
-                    continue;
-                }
-
-                return 0;
-            },
-
-            .clear => {
-                if (try utils.takeWord(reader)) |_| {
-                    try repl.err(&.{"too many args"});
-                    continue;
-                }
-                try repl.clear();
-            },
-
             .@"?" => {
-                if (try utils.takeWord(reader)) |_| {
+                if (try takeWord(reader)) |_| {
                     try repl.err(&.{"too many args"});
                     continue;
                 }
@@ -100,7 +112,7 @@ pub fn run(ctx: *Ctx) !u8 {
             },
 
             .db => {
-                if (try utils.takeWord(reader)) |_| {
+                if (try takeWord(reader)) |_| {
                     try repl.err(&.{"too many args"});
                     continue;
                 }
@@ -113,72 +125,116 @@ pub fn run(ctx: *Ctx) !u8 {
                 try repl.newPrompt();
             },
 
-            .ls => {
-                const name = try utils.takeWord(reader) orelse {
-                    try repl.err(&.{"missing Pokemon's name"});
-                    continue;
-                };
-
-                if (try utils.takeWord(reader)) |_| {
+            .exit => {
+                if (try takeWord(reader)) |_| {
                     try repl.err(&.{"too many args"});
                     continue;
                 }
 
-                var missing: MissingIterator = try .create(ctx.allocator, &ctx.conn, .{
+                return 0;
+            },
+
+            .missing,
+            .owned,
+            => {
+                const owned = command == .owned;
+
+                const name = try takeWord(reader) orelse {
+                    try repl.err(&.{"missing Pokemon's name"});
+                    continue;
+                };
+
+                if (try takeWord(reader)) |_| {
+                    try repl.err(&.{"too many args"});
+                    continue;
+                }
+
+                const tcgp: sdk.Serie = try .get(ctx.allocator, .{
+                    .id = "tcgp",
+                });
+
+                var iterator = sdk.Card.Brief.iterator(ctx.allocator, .{
                     .where = &.{
                         .like(.name, name),
                     },
                 });
-                defer missing.destroy();
 
                 // used for image links, so that text lives enough to be rendered
                 var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
                 defer arena.deinit();
 
-                var offset: u16 = 1;
-                while (try missing.next()) |card| : (offset += 1) {
-                    // allow to break loop with Ctrl+C
-                    if (repl.loop.tryEvent()) |evt| {
-                        switch (evt) {
-                            // NOTE: this will drop some input, but we can live with it
-                            .key_press => |key| {
-                                if (key.mods.ctrl and key.codepoint == 'c') {
-                                    try repl.printInNewLine(&.{
-                                        .{ .text = "interrupted" },
-                                    });
+                var empty = true;
 
-                                    break;
+                iterator_loop: while (try iterator.next()) |briefs| {
+                    card_loop: for (briefs) |brief| {
+                        if (isFromSerie(brief, tcgp)) continue;
+
+                        for (std.enums.values(Variant)) |variant| {
+                            // allow to break loop with Ctrl+C
+                            if (repl.loop.tryEvent()) |evt| {
+                                switch (evt) {
+                                    // NOTE: this will drop some input, but we can live with it
+                                    .key_press => |key| {
+                                        if (key.mods.ctrl and key.codepoint == 'c') {
+                                            try repl.printInNewLine(&.{
+                                                .{ .text = "interrupted" },
+                                            });
+
+                                            break :iterator_loop;
+                                        }
+                                    },
+                                    // re-publish event for later consumption
+                                    else => repl.loop.postEvent(evt),
                                 }
-                            },
-                            // re-publish event for later consumption
-                            else => repl.loop.postEvent(evt),
+                            }
+
+                            if (try db.isOwned(&ctx.conn, brief.id, variant) != owned) continue;
+
+                            const card: sdk.Card = try .get(ctx.allocator, .{
+                                .id = brief.id,
+                            });
+
+                            const pokemon = switch (card) {
+                                .pokemon => |pokemon| if (variantExists(pokemon, variant))
+                                    pokemon
+                                else
+                                    continue,
+                                else => {
+                                    try repl.warn(&.{"found a non-pokemon card"});
+                                    continue :card_loop;
+                                },
+                            };
+
+                            empty = false;
+
+                            var allocating: std.Io.Writer.Allocating = .init(arena.allocator());
+                            const writer = &allocating.writer;
+
+                            const link: vaxis.Cell.Hyperlink = if (pokemon.image) |image| link: {
+                                try image.toUrl(writer, .high, .jpg);
+                                break :link .{ .uri = try allocating.toOwnedSlice() };
+                            } else .{};
+
+                            try repl.addLine();
+                            try repl.print(&.{
+                                .{ .text = "[" },
+                                .{ .text = pokemon.id },
+                                .{ .text = "] " },
+                                .{ .text = pokemon.name, .link = link },
+                                .{ .text = " (" },
+                                .{ .text = @tagName(variant) },
+                                .{ .text = ") " },
+                            });
+
+                            // render on each card, so that screen is not frozen
+                            try repl.render();
                         }
                     }
+                }
 
-                    const pokemon = try utils.unwrapPokemon(card);
-
-                    try repl.addLine();
-                    try repl.print(&.{
-                        .{ .text = "[" },
-                        .{ .text = pokemon.id },
-                        .{ .text = "] " },
-                        .{ .text = pokemon.name },
-                        .{ .text = " " },
-                    });
-
-                    if (pokemon.image) |image| {
-                        var allocating: std.Io.Writer.Allocating = .init(arena.allocator());
-                        const writer = &allocating.writer;
-
-                        try image.toUrl(writer, .high, .jpg);
-
-                        try repl.print(&.{
-                            .{ .text = "(image)", .link = .{ .uri = try allocating.toOwnedSlice() } },
-                        });
-                    }
-
-                    // render on each card, so that screen is not frozen
-                    try repl.render();
+                if (empty) {
+                    try repl.warn(&.{"nothing found"});
+                    continue;
                 }
 
                 try repl.newPrompt();
@@ -186,44 +242,77 @@ pub fn run(ctx: *Ctx) !u8 {
 
             .add,
             .rm,
-            => |cmd| {
-                const adding = cmd == .add;
+            => {
+                const adding = command == .add;
 
-                const id = try utils.takeWord(reader) orelse {
+                const id = try takeWord(reader) orelse {
                     try repl.err(&.{"missing card's id"});
                     continue;
                 };
 
-                if (try utils.takeWord(reader)) |_| {
+                const variant_raw = try takeWord(reader) orelse {
+                    try repl.err(&.{"missing variant"});
+                    continue;
+                };
+
+                const variant = std.meta.stringToEnum(Variant, variant_raw) orelse {
+                    const variants = comptime std.enums.values(Variant);
+                    var buf: [variants.len * 2 + 1][]const u8 = @splat(" ");
+
+                    buf[0] = "invalid variant value, options are: ";
+
+                    for (variants, 0..) |variant, i| {
+                        buf[i * 2 + 1] = @tagName(variant);
+                    }
+
+                    try repl.err(&buf);
+                    continue;
+                };
+
+                if (try takeWord(reader)) |_| {
                     try repl.err(&.{"too many args"});
                     continue;
                 }
 
-                const owned = try db.isOwned(&ctx.conn, id);
-                if (owned == adding) {
+                if (try db.isOwned(&ctx.conn, id, variant) == adding) {
                     const msg = if (adding) "already in database" else "not in database";
                     try repl.warn(&.{msg});
                     continue;
                 }
 
-                utils.validateCardId(ctx.allocator, id) catch |e| {
-                    switch (e) {
-                        error.NotACard => try repl.warn(&.{"not a card"}),
-                        error.NonPokemonCard => try repl.warn(&.{"card is not a pokemon"}),
-                        error.UnexpectedError => try repl.err(&.{"unexpected error"}),
-                    }
+                const card = sdk.Card.get(ctx.allocator, .{
+                    .id = id,
+                }) catch |e| switch (e) {
+                    // not a card
+                    error.ServerErrorStatus => {
+                        try repl.err(&.{"id does not exist"});
+                        continue;
+                    },
+                    else => return e,
+                };
+                defer card.free(ctx.allocator);
 
-                    continue;
+                const pokemon = switch (card) {
+                    .pokemon => |pokemon| if (variantExists(pokemon, variant))
+                        pokemon
+                    else {
+                        try repl.err(&.{ id, "(", pokemon.name, ") has no ", variant_raw, " variant" });
+                        continue;
+                    },
+                    else => {
+                        try repl.err(&.{"card is not a pokemon"});
+                        continue;
+                    },
                 };
 
                 if (adding) {
-                    try db.addOwned(&ctx.conn, id);
+                    try db.addOwned(&ctx.conn, id, variant);
                 } else {
-                    try db.rmOwned(&ctx.conn, id);
+                    try db.rmOwned(&ctx.conn, id, variant);
                 }
 
-                const msg = if (adding) "added" else "removed";
-                try repl.success(&.{msg});
+                const msg = if (adding) "added " else "removed ";
+                try repl.success(&.{ msg, pokemon.name, " (", id, ")" });
             },
         }
     }

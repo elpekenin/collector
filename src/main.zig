@@ -5,7 +5,6 @@ const sdk = @import("ptz").Sdk(.en);
 const db = @import("db.zig");
 const app = @import("app.zig");
 const Ctx = @import("Ctx.zig");
-const MissingIterator = @import("MissingIterator.zig");
 
 fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
     try stderr.print("error: missing argument '--{s}'\n", .{arg});

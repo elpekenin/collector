@@ -8,12 +8,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const vaxis = @import("vaxis");
+const Key = vaxis.Key;
 
-const utils = @import("../utils.zig");
-const in = @import("input.zig");
+const History = @import("History.zig");
 const Line = @import("Line.zig");
 const Position = @import("Position.zig");
-const TextBuffer = @import("TextBuffer.zig");
 
 const Repl = @This();
 
@@ -37,15 +36,14 @@ pub const styles = struct {
 };
 
 allocator: Allocator,
-/// temporary message to be shown below input
-hint: ?Line,
+history: History,
 /// input status (what's written and where)
 input: struct {
     buf: vaxis.widgets.TextInput,
+    // TODO: remove this field implementing history.getLastInput or something like that instead
     line: u16,
 },
 loop: Loop,
-text_buffer: TextBuffer,
 tty: vaxis.Tty,
 vx: vaxis.Vaxis,
 win: vaxis.Window,
@@ -54,13 +52,12 @@ win: vaxis.Window,
 pub fn create(allocator: Allocator) Repl {
     return .{
         .allocator = allocator,
-        .hint = null,
+        .history = .empty,
         .input = .{
             .line = 0,
             .buf = .init(allocator),
         },
         .loop = undefined,
-        .text_buffer = .empty,
         .tty = undefined,
         .vx = undefined,
         .win = undefined,
@@ -98,67 +95,64 @@ pub fn destroy(self: *Repl) void {
 pub fn newPrompt(self: *Repl) Allocator.Error!void {
     try self.addLine();
 
-    const entry = self.text_buffer.lastEntry();
-    entry.input = true;
+    const entry = self.history.lastEntry();
+    entry.is_input = true;
 
-    try entry.line.append(self.allocator, .{
-        .text = "collector>",
-        .style = .{ .bold = true },
-    });
+    // reset history lookup
+    self.history.cursor = null;
 
-    self.input.line = @intCast(self.text_buffer.entries.items.len - 1);
-
-    if (self.hint) |message| {
-        message.deinit(self.allocator);
-    }
-
-    self.hint = null;
-}
-
-pub fn clear(self: *Repl) Allocator.Error!void {
-    for (0..self.win.height) |_| {
-        try self.addLine();
-    }
-
-    try self.newPrompt();
+    self.input.line = @intCast(self.history.getLen() - 1);
 }
 
 pub fn render(self: *Repl) !void {
     self.win.clear();
 
     var pos: Position = .zero;
-    for (self.text_buffer.entries.items, 0..) |entry, i| {
-        const res = self.win.print(entry.line.segments.items, pos.toOptions());
-        pos.set(res);
+    for (self.history.entries.items, 0..) |entry, i| {
+        if (entry.is_input) {
+            pos.set(
+                self.win.print(
+                    &.{
+                        .{
+                            .text = "collector> ",
+                            .style = .{ .bold = true },
+                        },
+                    },
+                    pos.toOptions(),
+                ),
+            );
+        }
+
+        pos.set(
+            self.win.print(
+                entry.line.segments.items,
+                pos.toOptions(),
+            ),
+        );
 
         if (self.input.line == i) {
-            const first = self.win.print(
-                &.{
-                    .{ .text = self.input.buf.buf.firstHalf() },
-                },
-                pos.toOptions(),
+            pos.set(
+                self.win.print(
+                    &.{
+                        .{ .text = self.input.buf.buf.firstHalf() },
+                    },
+                    pos.toOptions(),
+                ),
             );
-            pos.set(first);
 
-            self.win.showCursor(first.col, first.row);
+            self.win.showCursor(pos.col, pos.row);
 
-            const second = self.win.print(
-                &.{
-                    .{ .text = self.input.buf.buf.secondHalf() },
-                },
-                pos.toOptions(),
+            pos.set(
+                self.win.print(
+                    &.{
+                        .{ .text = self.input.buf.buf.secondHalf() },
+                    },
+                    pos.toOptions(),
+                ),
             );
-            pos.set(second);
         }
 
         pos.advanceLine();
-    }
-
-    // only show hint if there's nothing printed below
-    if (self.input.line == self.text_buffer.entries.items.len - 1) {
-        if (self.hint) |message| {
-            _ = self.win.print(message.segments.items, pos.toOptions());
-        }
     }
 
     try self.vx.render(self.tty.writer());
@@ -166,17 +160,17 @@ pub fn render(self: *Repl) !void {
 
 pub fn addLine(self: *Repl) Allocator.Error!void {
     // if input won't fit, remove previous items from history
-    if (self.win.height > 0 and self.text_buffer.entries.items.len >= self.win.height) {
-        const removed = self.text_buffer.popFirst();
+    if (self.win.height > 0 and self.history.entries.items.len >= self.win.height) {
+        const removed = self.history.popFirst();
         removed.deinit(self.allocator);
     }
 
-    try self.text_buffer.entries.append(self.allocator, .empty);
+    try self.history.entries.append(self.allocator, .empty);
 }
 
 /// add text to current line
 pub fn print(self: *Repl, segments: []const vaxis.Segment) Allocator.Error!void {
-    const line = self.text_buffer.lastLine();
+    const line = self.history.lastLine();
 
     for (segments) |segment| {
         try line.append(self.allocator, segment);
@@ -189,35 +183,19 @@ pub fn printInNewLine(self: *Repl, segments: []const vaxis.Segment) Allocator.Er
     try self.print(segments);
 }
 
-/// display a hint
-pub fn showHint(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    if (self.hint) |message| {
-        message.deinit(self.allocator);
-    }
-
-    var hint: Line = .empty;
-    for (texts) |text| {
-        try hint.append(self.allocator, .{
-            .text = text,
-        });
-    }
-
-    self.hint = hint;
-}
-
 pub fn storeInput(self: *Repl, input: []const u8) Allocator.Error!void {
     try self.print(&.{
         .{ .text = input },
     });
 
-    const entry = self.text_buffer.lastEntry();
-    std.debug.assert(entry.input == true);
+    const entry = self.history.lastEntry();
+    std.debug.assert(entry.is_input == true);
 }
 
 fn output(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.Error!void {
     try self.addLine();
 
-    const line = self.text_buffer.lastLine();
+    const line = self.history.lastLine();
     for (texts) |text| {
         try line.append(self.allocator, .{
             .text = text,
@@ -246,15 +224,10 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
     const event = self.loop.nextEvent();
     switch (event) {
         .key_press => |key| {
-            for (in.handlers) |handler| {
-                switch (handler(self, key)) {
+            for (handlers) |handler| {
+                switch (try handler(self, key)) {
                     .noop => {},
                     .done => {
-                        try self.render();
-                        return null;
-                    },
-                    .hint => |hint| {
-                        try self.showHint(&.{hint});
                         try self.render();
                         return null;
                     },
@@ -288,3 +261,115 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
         },
     }
 }
+
+const HandlerResult = anyerror!union(enum) {
+    noop,
+    done,
+    exit: u8,
+};
+
+fn ctrlCombinations(self: *Repl, key: Key) HandlerResult {
+    if (!key.mods.ctrl) return .noop;
+
+    const empty_input = self.input.buf.buf.realLength() == 0;
+
+    // Ctrl+D + empty input => exit
+    switch (key.codepoint) {
+        'd' => {
+            if (empty_input) {
+                return .{ .exit = 0 };
+            }
+
+            return .done;
+        },
+
+        // Ctrl+C => clear input
+        'c' => {
+            if (!empty_input) {
+                self.input.buf.clearRetainingCapacity();
+            }
+
+            return .done;
+        },
+
+        else => return .noop,
+    }
+}
+
+fn arrows(self: *Repl, key: Key) HandlerResult {
+    switch (key.codepoint) {
+        Key.left => {
+            if (key.mods.ctrl) {
+                self.input.buf.moveBackwardWordwise();
+            } else {
+                self.input.buf.cursorLeft();
+            }
+
+            return .done;
+        },
+
+        Key.right => {
+            if (key.mods.ctrl) {
+                self.input.buf.moveForwardWordwise();
+            } else {
+                self.input.buf.cursorRight();
+            }
+
+            return .done;
+        },
+
+        Key.up,
+        Key.down,
+        => |cp| {
+            // TODO: do not copy empty lines
+            if (cp == Key.up) {
+                self.history.moveCursorUp();
+            } else {
+                self.history.moveCursorDown();
+            }
+
+            if (self.history.getSelectedEntry()) |entry| {
+                const input = try entry.line.toOwnedSlice(self.allocator);
+                defer self.allocator.free(input);
+
+                self.input.buf.clearRetainingCapacity();
+
+                try self.input.buf.insertSliceAtCursor(input);
+            }
+
+            return .done;
+        },
+
+        else => return .noop,
+    }
+}
+
+fn deletion(self: *Repl, key: Key) HandlerResult {
+    if (key.codepoint == Key.backspace) {
+        if (key.mods.ctrl) {
+            self.input.buf.deleteWordBefore();
+        } else {
+            self.input.buf.deleteBeforeCursor();
+        }
+
+        return .done;
+    }
+
+    if (key.codepoint == Key.delete) {
+        if (key.mods.ctrl) {
+            self.input.buf.deleteWordAfter();
+        } else {
+            self.input.buf.deleteAfterCursor();
+        }
+
+        return .done;
+    }
+
+    return .noop;
+}
+
+const handlers: []const *const fn (*Repl, Key) HandlerResult = &.{
+    ctrlCombinations,
+    arrows,
+    deletion,
+};

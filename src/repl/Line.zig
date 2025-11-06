@@ -30,6 +30,18 @@ pub fn appendSlice(self: *Line, allocator: Allocator, segments: []const vaxis.Se
     }
 }
 
+/// append all the texts into a single string, any styling will be lost
+pub fn toOwnedSlice(self: *const Line, allocator: Allocator) Allocator.Error![]const u8 {
+    var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(allocator);
+
+    for (self.segments.items) |segment| {
+        try list.appendSlice(allocator, segment.text);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
+
 pub fn deinit(self: *const Line, allocator: Allocator) void {
     for (self.segments.items) |item| {
         allocator.free(item.text);
