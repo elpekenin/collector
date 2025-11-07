@@ -1,3 +1,6 @@
+// TODO: accross the project, properly handle resources (missing `errdefer allocator.free()` and the like)
+//       doesn't matter atm because errors propagate (program quits), could become a problem if we recover from them
+
 const std = @import("std");
 
 const sdk = @import("ptz").Sdk(.en);
@@ -23,25 +26,40 @@ pub fn main() !u8 {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
 
-    // TODO: find and fix leaks, rather than using an arena
-    var arena: std.heap.ArenaAllocator = .init(gpa.allocator());
-    defer arena.deinit();
+    const allocator = gpa.allocator();
 
-    const allocator = arena.allocator();
+    // validate arguments
+    {
+        var args: std.process.ArgIterator = try .initWithAllocator(allocator);
+        defer args.deinit();
+
+        if (!args.skip()) {
+            try stderr.print("program's name was expected\n", .{});
+            return 1;
+        }
+
+        if (args.skip()) {
+            try stderr.print("this program doesn't receive arguments\n", .{});
+            return 1;
+        }
+    }
 
     const dir_path = try std.fs.getAppDataDir(allocator, "collector");
     defer allocator.free(dir_path);
 
-    const absolute_path = try std.fs.path.resolve(allocator, &.{dir_path});
-    defer allocator.free(absolute_path);
+    // check if folder exists, otherwise create it
+    {
+        const absolute_path = try std.fs.path.resolve(allocator, &.{dir_path});
+        defer allocator.free(absolute_path);
 
-    std.fs.accessAbsolute(absolute_path, .{}) catch |e| switch (e) {
-        error.FileNotFound => {
-            try std.fs.makeDirAbsolute(absolute_path);
-            try stdout.print("info: created directory '{s}' for data storage\n", .{absolute_path});
-        },
-        else => return e,
-    };
+        std.fs.accessAbsolute(absolute_path, .{}) catch |e| switch (e) {
+            error.FileNotFound => {
+                try std.fs.makeDirAbsolute(absolute_path);
+                try stdout.print("info: created directory '{s}' for data storage\n", .{absolute_path});
+            },
+            else => return e,
+        };
+    }
 
     const path = try std.fs.path.joinZ(allocator, &.{ dir_path, "db.sqlite3" });
     defer allocator.free(path);

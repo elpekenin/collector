@@ -13,7 +13,7 @@ pub const Entry = struct {
         .line = .empty,
     };
 
-    pub fn deinit(self: *const Entry, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Entry, allocator: std.mem.Allocator) void {
         self.line.deinit(allocator);
     }
 };
@@ -25,6 +25,14 @@ pub const empty: History = .{
     .cursor = null,
     .entries = .empty,
 };
+
+pub fn deinit(self: *History, allocator: std.mem.Allocator) void {
+    for (self.entries.items) |*entry| {
+        entry.deinit(allocator);
+    }
+
+    self.entries.deinit(allocator);
+}
 
 pub fn getLen(self: *History) usize {
     return self.entries.items.len;

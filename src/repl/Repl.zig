@@ -85,7 +85,8 @@ pub fn init(self: *Repl, buffer: []u8) !void {
     try self.newPrompt();
 }
 
-pub fn destroy(self: *Repl) void {
+pub fn deinit(self: *Repl) void {
+    self.history.deinit(self.allocator);
     self.input.buf.deinit();
     self.loop.stop();
     self.vx.deinit(self.allocator, self.tty.writer());
@@ -161,7 +162,7 @@ pub fn render(self: *Repl) !void {
 pub fn addLine(self: *Repl) Allocator.Error!void {
     // if input won't fit, remove previous items from history
     if (self.win.height > 0 and self.history.entries.items.len >= self.win.height) {
-        const removed = self.history.popFirst();
+        var removed = self.history.popFirst();
         removed.deinit(self.allocator);
     }
 
@@ -231,9 +232,7 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
                         try self.render();
                         return null;
                     },
-                    .exit => |code| {
-                        return .{ .exit = code };
-                    },
+                    .exit => |code| return .{ .exit = code },
                 }
             }
 

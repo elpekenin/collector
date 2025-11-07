@@ -5,16 +5,16 @@
     .fingerprint = 0xcedbf54c3db22bae,
     .dependencies = .{
         .ptz = .{
-            .url = "git+https://github.com/elpekenin/ptz#4e53b725935a37ccb15a957cd83e36774e584a2b",
-            .hash = "ptz-0.0.1-CesFmgPTAAAS8gjumgLSie78wJj53aPmtCqjXdT64VsF",
-        },
-        .zqlite = .{
-            .url = "git+https://github.com/karlseguin/zqlite.zig#e3b6972230ccb1d2069e1ff298699d73b3180b3c",
-            .hash = "zqlite-0.0.0-RWLaY-C4mADQvgmoLhHD-cHtCgKYdQNAoqASip2uJzBL",
+            .url = "git+https://github.com/elpekenin/ptz#084ea5b50454800495c6ca0d9b954f2ee4b413a8",
+            .hash = "ptz-0.0.1-CesFmv3nAADZLooywuATlznu86BQbtjgGpa_84u-awSM",
         },
         .vaxis = .{
             .url = "git+https://github.com/rockorager/libvaxis#cfa6311448755cf18684c09697d20b7a7622e578",
             .hash = "vaxis-0.5.1-BWNV_IcuCQCjrYTHNe3-ArhtpwLzRfgI2mBu0yKT7IZl",
+        },
+        .zqlite = .{
+            .url = "git+https://github.com/karlseguin/zqlite.zig#e3b6972230ccb1d2069e1ff298699d73b3180b3c",
+            .hash = "zqlite-0.0.0-RWLaY-C4mADQvgmoLhHD-cHtCgKYdQNAoqASip2uJzBL",
         },
     },
     .paths = .{

@@ -66,7 +66,7 @@ pub fn run(ctx: *Ctx) !u8 {
     var repl: Repl = .create(ctx.allocator);
     try repl.init(&buffer);
 
-    defer repl.destroy();
+    defer repl.deinit();
 
     while (true) {
         try repl.render();
@@ -106,14 +106,14 @@ pub fn run(ctx: *Ctx) !u8 {
                     .{ .text = "available commands:" },
                 });
 
-                inline for (@typeInfo(Command).@"enum".fields) |field| {
+                for (std.enums.values(Command)) |cmd| {
                     // prevent help from listing itself
-                    if (field != .help) {
-                        try repl.print(&.{
-                            .{ .text = " " },
-                            .{ .text = field.name },
-                        });
-                    }
+                    if (cmd == .help) continue;
+
+                    try repl.print(&.{
+                        .{ .text = " " },
+                        .{ .text = @tagName(cmd) },
+                    });
                 }
 
                 try repl.newPrompt();
@@ -160,6 +160,7 @@ pub fn run(ctx: *Ctx) !u8 {
                 const tcgp: sdk.Serie = try .get(ctx.allocator, .{
                     .id = "tcgp",
                 });
+                defer tcgp.deinit();
 
                 var iterator = sdk.Card.Brief.iterator(ctx.allocator, .{
                     .where = &.{
@@ -175,11 +176,14 @@ pub fn run(ctx: *Ctx) !u8 {
 
                 iterator_loop: while (try iterator.next()) |briefs| {
                     for (briefs) |brief| {
+                        defer brief.deinit();
+
                         if (isFromSerie(brief, tcgp)) continue;
 
                         const card: sdk.Card = try .get(ctx.allocator, .{
                             .id = brief.id,
                         });
+                        defer card.deinit();
 
                         const pokemon = switch (card) {
                             .pokemon => |pokemon| pokemon,
@@ -314,7 +318,7 @@ pub fn run(ctx: *Ctx) !u8 {
                     },
                     else => return e,
                 };
-                defer card.free(ctx.allocator);
+                defer card.deinit();
 
                 const pokemon = switch (card) {
                     .pokemon => |pokemon| if (variantExists(pokemon, variant))

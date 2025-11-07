@@ -42,10 +42,12 @@ pub fn toOwnedSlice(self: *const Line, allocator: Allocator) Allocator.Error![]c
     return list.toOwnedSlice(allocator);
 }
 
-pub fn deinit(self: *const Line, allocator: Allocator) void {
+pub fn deinit(self: *Line, allocator: Allocator) void {
     for (self.segments.items) |item| {
         allocator.free(item.text);
         allocator.free(item.link.uri);
         allocator.free(item.link.params);
     }
+
+    self.segments.deinit(allocator);
 }
