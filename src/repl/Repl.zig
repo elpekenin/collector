@@ -172,10 +172,7 @@ pub fn addLine(self: *Repl) Allocator.Error!void {
 /// add text to current line
 pub fn print(self: *Repl, segments: []const vaxis.Segment) Allocator.Error!void {
     const line = self.history.lastLine();
-
-    for (segments) |segment| {
-        try line.append(self.allocator, segment);
-    }
+    try line.appendSlice(self.allocator, segments);
 }
 
 /// create a new line and print to it
