@@ -5,9 +5,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const dep_args = .{ .target = target, .optimize = optimize };
+    // configuration
+    const llvm = if (optimize == .Debug)
+        true // allow debugging with vanilla LLDB (avoid self-hosted backend)
+    else
+        null; // else, let zig take decissions for us
 
     // deps
+    const dep_args = .{
+        .target = target,
+        .optimize = optimize,
+    };
+
     const ptz = b.dependency("ptz", dep_args);
     const vaxis = b.dependency("vaxis", dep_args);
     const zqlite = b.dependency("zqlite", dep_args);
@@ -23,11 +32,10 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "ptz", .module = ptz.module("ptz") },
                 .{ .name = "vaxis", .module = vaxis.module("vaxis") },
                 .{ .name = "zqlite", .module = zqlite.module("zqlite") },
-            }
+            },
         }),
-        // for debug-ability
-        .use_lld = true,
-        .use_llvm = true,
+        .use_lld = llvm,
+        .use_llvm = llvm,
     });
     b.installArtifact(exe);
 

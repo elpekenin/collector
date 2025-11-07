@@ -15,13 +15,18 @@ const Repl = @import("repl/Repl.zig");
 const Variant = Owned.VariantEnum;
 
 const Command = enum {
-    @"?",
+    // "entrypoint" telling user how to interact with the app
+    help,
+
+    // sort of "builtins"
     db,
     exit,
 
+    // interact with db
     add,
     rm,
 
+    // listing
     owned,
     missing,
 };
@@ -91,7 +96,7 @@ pub fn run(ctx: *Ctx) !u8 {
         };
 
         switch (command) {
-            .@"?" => {
+            .help => {
                 if (try takeWord(reader)) |_| {
                     try repl.err(&.{"too many args"});
                     continue;
@@ -102,10 +107,13 @@ pub fn run(ctx: *Ctx) !u8 {
                 });
 
                 inline for (@typeInfo(Command).@"enum".fields) |field| {
-                    try repl.print(&.{
-                        .{ .text = " " },
-                        .{ .text = field.name },
-                    });
+                    // prevent help from listing itself
+                    if (field != .help) {
+                        try repl.print(&.{
+                            .{ .text = " " },
+                            .{ .text = field.name },
+                        });
+                    }
                 }
 
                 try repl.newPrompt();
