@@ -58,7 +58,7 @@ pub fn popFirst(self: *History) Entry {
 }
 
 fn computeCursor(self: *History) void {
-    if (self.cursor) |_| return;
+    if (self.cursor != null) return;
 
     var index = self.getLen();
     while (index > 0) {

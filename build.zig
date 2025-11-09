@@ -19,7 +19,10 @@ pub fn build(b: *std.Build) void {
 
     const ptz = b.dependency("ptz", dep_args);
     const vaxis = b.dependency("vaxis", dep_args);
-    const zqlite = b.dependency("zqlite", dep_args);
+    const zmig = b.dependency("zmig", dep_args);
+    // hack: use same version of sqlite as zmig
+    //       without this, compiler complains about "different" types
+    const sqlite = zmig.builder.dependency("sqlite", dep_args);
 
     // exe
     const exe = b.addExecutable(.{
@@ -30,8 +33,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "ptz", .module = ptz.module("ptz") },
+                .{ .name = "sqlite", .module = sqlite.module("sqlite") },
                 .{ .name = "vaxis", .module = vaxis.module("vaxis") },
-                .{ .name = "zqlite", .module = zqlite.module("zqlite") },
+                .{ .name = "zmig", .module = zmig.module("zmig") },
             },
         }),
         .use_lld = llvm,
@@ -42,4 +46,22 @@ pub fn build(b: *std.Build) void {
     // run step
     const run = b.step("run", "run the tool");
     run.dependOn(&b.addRunArtifact(exe).step);
+
+    // migrations
+    const clone = zmig.builder.named_writefiles.get("clone_migrations").?;
+    _ = clone.addCopyDirectory(b.path("migrations"), "", .{
+        .include_extensions = &.{".sql"},
+    });
+
+    const zmig_run = b.addRunArtifact(
+        b.addExecutable(.{
+            .root_module = zmig.module("zmig-cli"),
+            // Enabled due to https://github.com/vrischmann/zig-sqlite/issues/195
+            .use_llvm = true,
+            .name = "zmig-cli",
+        }),
+    );
+    const zmig_step = b.step("zmig", "Invokes the zmig-cli tool");
+    zmig_step.dependOn(&zmig_run.step);
+    if (b.args) |args| zmig_run.addArgs(args);
 }

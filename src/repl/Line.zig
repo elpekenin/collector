@@ -7,16 +7,27 @@ const Line = @This();
 
 segments: std.ArrayList(vaxis.Segment),
 
-pub const empty: Line = .{ .segments = .empty };
+pub const empty: Line = .{
+    .segments = .empty,
+};
 
 /// copies all texts to make sure we don't draw dangling pointers
 pub fn append(self: *Line, allocator: Allocator, segment: vaxis.Segment) Allocator.Error!void {
+    const text = try allocator.dupe(u8, segment.text);
+    errdefer allocator.free(text);
+
+    const uri = try allocator.dupe(u8, segment.link.uri);
+    errdefer allocator.free(uri);
+
+    const params = try allocator.dupe(u8, segment.link.params);
+    errdefer allocator.free(params);
+
     try self.segments.append(allocator, .{
-        .text = try allocator.dupe(u8, segment.text),
+        .text = text,
         .style = segment.style,
         .link = .{
-            .uri = try allocator.dupe(u8, segment.link.uri),
-            .params = try allocator.dupe(u8, segment.link.params),
+            .uri = uri,
+            .params = params,
         },
     });
 }
@@ -40,10 +51,10 @@ pub fn toOwnedSlice(self: *const Line, allocator: Allocator) Allocator.Error![]c
 }
 
 pub fn deinit(self: *Line, allocator: Allocator) void {
-    for (self.segments.items) |item| {
-        allocator.free(item.text);
-        allocator.free(item.link.uri);
-        allocator.free(item.link.params);
+    for (self.segments.items) |segment| {
+        allocator.free(segment.text);
+        allocator.free(segment.link.uri);
+        allocator.free(segment.link.params);
     }
 
     self.segments.deinit(allocator);

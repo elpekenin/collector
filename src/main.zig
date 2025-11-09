@@ -5,9 +5,9 @@ const std = @import("std");
 
 const sdk = @import("ptz").Sdk(.en);
 
-const db = @import("db.zig");
 const app = @import("app.zig");
 const Ctx = @import("Ctx.zig");
+const Database = @import("Database.zig");
 
 fn missingArg(stderr: *std.Io.Writer, arg: []const u8) !void {
     try stderr.print("error: missing argument '--{s}'\n", .{arg});
@@ -64,14 +64,12 @@ pub fn main() !u8 {
     const path = try std.fs.path.joinZ(allocator, &.{ dir_path, "db.sqlite3" });
     defer allocator.free(path);
 
-    const conn = try db.connect(.{
-        .path = path,
-    });
-    defer conn.close();
+    var database = try Database.init(allocator, stderr, path);
+    defer database.deinit();
 
     var ctx: Ctx = .{
         .allocator = allocator,
-        .conn = conn,
+        .database = &database,
         .stderr = stderr,
         .stdout = stdout,
     };
