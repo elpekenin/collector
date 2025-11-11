@@ -57,6 +57,14 @@ pub fn popFirst(self: *History) Entry {
     return self.entries.orderedRemove(0);
 }
 
+pub fn popLast(self: *History) ?Entry {
+    if (self.cursor) |cursor| {
+        if (cursor == self.getLen() - 1) self.cursor = null;
+    }
+
+    return self.entries.pop();
+}
+
 fn computeCursor(self: *History) void {
     if (self.cursor != null) return;
 

@@ -11,9 +11,10 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const sqlite = @import("sqlite");
 const zmig = @import("zmig");
 
-const Database = @This();
-
 const ptz = @import("ptz");
+
+pub const Connection = sqlite.Db;
+pub const Diagnostics = sqlite.Diagnostics;
 
 pub const types = struct {
     pub const Variants = struct {
@@ -71,11 +72,8 @@ fn TableType(comptime table: Table) type {
 
 const Table = std.meta.DeclEnum(tables);
 
-inner: sqlite.Db,
-stderr: *std.Io.Writer,
-
-pub fn init(allocator: Allocator, stderr: *std.Io.Writer, path: [:0]const u8) !Database {
-    var database: sqlite.Db = try .init(.{
+pub fn init(allocator: Allocator, path: [:0]const u8, diagnostics: *zmig.Diagnostics) !Connection {
+    var database: Connection = try .init(.{
         .mode = .{ .File = path },
         .open_flags = .{
             .create = true,
@@ -83,37 +81,27 @@ pub fn init(allocator: Allocator, stderr: *std.Io.Writer, path: [:0]const u8) !D
         },
     });
 
-    var diagnostics: zmig.Diagnostics = .{};
-    zmig.applyMigrations(&database, allocator, .{ .diagnostics = &diagnostics }) catch |e| {
-        try stderr.print("{f}\n", .{diagnostics});
-        return e;
-    };
+    try zmig.applyMigrations(&database, allocator, .{ .diagnostics = diagnostics });
 
-    return .{
-        .inner = database,
-        .stderr = stderr,
-    };
+    return database;
 }
 
-pub fn deinit(self: *Database) void {
-    self.inner.deinit();
-}
-
-/// caller owns the memory
 pub fn get(
-    self: *Database,
+    connection: *Connection,
     comptime table: Table,
     allocator: Allocator,
     comptime column: std.meta.FieldEnum(TableType(table)),
     value: @FieldType(TableType(table), @tagName(column)),
+    diagnostics: *sqlite.Diagnostics,
 ) !Owned(?TableType(table)) {
     const query = comptime compPrint("SELECT * FROM {s} WHERE {s}=?", .{
         @tagName(table),
         @tagName(column),
     });
-    errdefer self.stderr.print("query: {s}", .{query}) catch {};
 
-    var stmt = try self.prepare(query);
+    var stmt = try connection.prepareWithDiags(query, .{
+        .diags = diagnostics,
+    });
     defer stmt.deinit();
 
     const arena = try newArena(allocator);
@@ -130,16 +118,15 @@ pub fn get(
     };
 }
 
-/// slice is owned by caller and must be freed
 pub fn all(
-    self: *Database,
+    connection: *Connection,
     comptime table: Table,
     allocator: Allocator,
+    diagnostics: *sqlite.Diagnostics,
 ) !Owned([]const TableType(table)) {
     const query = comptime compPrint("SELECT * FROM {s}", .{@tagName(table)});
-    errdefer self.stderr.print("query: {s}", .{query}) catch {};
 
-    var stmt = try self.prepare(query);
+    var stmt = try connection.prepareWithDiags(query, .{ .diags = diagnostics });
     defer stmt.deinit();
 
     const arena = try newArena(allocator);
@@ -158,10 +145,11 @@ pub fn all(
 
 /// inserts or updates the given values
 pub fn save(
-    self: *Database,
+    connection: *Connection,
     comptime table: Table,
     allocator: Allocator,
     value: TableType(table),
+    diagnostics: *sqlite.Diagnostics,
 ) !void {
     const query = comptime queryBuilder(
         table,
@@ -174,9 +162,8 @@ pub fn save(
         placeholderCommaSpace,
         placeholderCloseParen,
     );
-    errdefer self.stderr.print("query: {s}", .{query}) catch {};
 
-    var stmt = try self.prepare(query);
+    var stmt = try connection.prepareWithDiags(query, .{ .diags = diagnostics,});
     defer stmt.deinit();
 
     // HACK: work around sqlite's leak
@@ -187,8 +174,8 @@ pub fn save(
     try stmt.execAlloc(arena.allocator(), .{}, value);
 }
 
-pub fn getFilename(self: *Database) [*c]const u8 {
-    return sqlite.c.sqlite3_db_filename(self.inner.db, null);
+pub fn getFilename(connection: *Connection) [*c]const u8 {
+    return sqlite.c.sqlite3_db_filename(connection.db, null);
 }
 
 // internal query-related code
@@ -246,22 +233,14 @@ fn placeholderCloseParen(comptime query: []const u8, _: StructField) []const u8 
     return query ++ "?)";
 }
 
-fn prepare(self: *Database, comptime query: []const u8) !sqlite.StatementType(.{}, query) {
-    var diagnostics: sqlite.Diagnostics = .{};
-
-    return self.inner.prepareWithDiags(query, .{ .diags = &diagnostics }) catch |err| {
-        try self.stderr.print("unable to prepare statement: {f}", .{diagnostics});
-        return err;
-    };
-}
-
 fn newArena(allocator: Allocator) Allocator.Error!*ArenaAllocator {
     const arena = try allocator.create(ArenaAllocator);
     arena.* = .init(allocator);
     return arena;
 }
 
-fn Owned(comptime T: type) type {
+/// Caller-owned value, with a method to free it
+pub fn Owned(comptime T: type) type {
     return struct {
         value: T,
         arena: *ArenaAllocator,

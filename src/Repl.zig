@@ -4,15 +4,16 @@
 //!
 //! Will yield back to user upon exit request or end of user input (enter key pressed)
 
+// TODO: implement a std.Io.Writer (even if restricted) as a DX improvement
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const vaxis = @import("vaxis");
 const Key = vaxis.Key;
 
-const History = @import("History.zig");
-const Line = @import("Line.zig");
-const Position = @import("Position.zig");
+const History = @import("repl/History.zig");
+const Position = @import("repl/Position.zig");
 
 const Repl = @This();
 
@@ -35,6 +36,7 @@ pub const styles = struct {
     pub const red: vaxis.Style = .{ .fg = .{ .rgb = .{ 255, 0, 0 } } };
 };
 
+// TODO: remove this field, receive when needed
 allocator: Allocator,
 history: History,
 /// input status (what's written and where)
@@ -82,7 +84,7 @@ pub fn init(self: *Repl, buffer: []u8) !void {
     try self.vx.enterAltScreen(self.tty.writer());
     try self.vx.queryTerminal(self.tty.writer(), std.time.ns_per_s);
 
-    try self.newPrompt();
+    try self.promptInNewLine();
 }
 
 pub fn deinit(self: *Repl) void {
@@ -93,9 +95,7 @@ pub fn deinit(self: *Repl) void {
     self.tty.deinit();
 }
 
-pub fn newPrompt(self: *Repl) Allocator.Error!void {
-    try self.addLine();
-
+pub fn prompt(self: *Repl) void {
     const entry = self.history.lastEntry();
     entry.is_input = true;
 
@@ -103,6 +103,11 @@ pub fn newPrompt(self: *Repl) Allocator.Error!void {
     self.history.cursor = null;
 
     self.input.line = @intCast(self.history.getLen() - 1);
+}
+
+pub fn promptInNewLine(self: *Repl) Allocator.Error!void {
+    try self.addLine();
+    self.prompt();
 }
 
 pub fn render(self: *Repl) !void {
@@ -187,10 +192,14 @@ pub fn storeInput(self: *Repl, input: []const u8) Allocator.Error!void {
     });
 
     const entry = self.history.lastEntry();
-    std.debug.assert(entry.is_input == true);
+    std.debug.assert(entry.is_input);
 }
 
-fn output(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.Error!void {
+const Options = struct {
+    prompt: bool = true,
+};
+
+fn output(self: *Repl, texts: []const []const u8, style: vaxis.Style, options: Options) Allocator.Error!void {
     try self.addLine();
 
     const line = self.history.lastLine();
@@ -201,19 +210,22 @@ fn output(self: *Repl, texts: []const []const u8, style: vaxis.Style) Allocator.
         });
     }
 
-    try self.newPrompt();
+    try self.addLine();
+    if (options.prompt) {
+        self.prompt();
+    }
 }
 
-pub fn success(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    return self.output(texts, styles.green);
+pub fn success(self: *Repl, texts: []const []const u8, options: Options) Allocator.Error!void {
+    return self.output(texts, styles.green, options);
 }
 
-pub fn warn(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    return self.output(texts, styles.orange);
+pub fn warn(self: *Repl, texts: []const []const u8, options: Options) Allocator.Error!void {
+    return self.output(texts, styles.orange, options);
 }
 
-pub fn err(self: *Repl, texts: []const []const u8) Allocator.Error!void {
-    return self.output(texts, styles.red);
+pub fn err(self: *Repl, texts: []const []const u8, options: Options) Allocator.Error!void {
+    return self.output(texts, styles.red, options);
 }
 
 /// takes care of rendering the window contents and restarting screen
@@ -225,10 +237,7 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
             for (handlers) |handler| {
                 switch (try handler(self, key)) {
                     .noop => {},
-                    .done => {
-                        try self.render();
-                        return null;
-                    },
+                    .done => return null,
                     .exit => |code| return .{ .exit = code },
                 }
             }
@@ -239,7 +248,6 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
                     try self.input.buf.insertSliceAtCursor(text);
                 }
 
-                try self.render();
                 return null;
             }
 
@@ -252,19 +260,25 @@ pub fn nextEvent(self: *Repl) !?UserFacingEvent {
 
             self.win.clear();
 
-            try self.render();
             return null;
         },
     }
 }
 
-const HandlerResult = anyerror!union(enum) {
+pub fn rmLine(self: *Repl) void {
+    var line = self.history.popLast() orelse unreachable;
+    line.deinit(self.allocator);
+}
+
+// internal
+
+const HandlerResult = union(enum) {
     noop,
     done,
     exit: u8,
 };
 
-fn ctrlCombinations(self: *Repl, key: Key) HandlerResult {
+fn ctrlCombinations(self: *Repl, key: Key) !HandlerResult {
     if (!key.mods.ctrl) return .noop;
 
     const empty_input = self.input.buf.buf.realLength() == 0;
@@ -292,7 +306,7 @@ fn ctrlCombinations(self: *Repl, key: Key) HandlerResult {
     }
 }
 
-fn arrows(self: *Repl, key: Key) HandlerResult {
+fn arrows(self: *Repl, key: Key) !HandlerResult {
     switch (key.codepoint) {
         Key.left => {
             if (key.mods.ctrl) {
@@ -340,7 +354,7 @@ fn arrows(self: *Repl, key: Key) HandlerResult {
     }
 }
 
-fn deletion(self: *Repl, key: Key) HandlerResult {
+fn deletion(self: *Repl, key: Key) !HandlerResult {
     if (key.codepoint == Key.backspace) {
         if (key.mods.ctrl) {
             self.input.buf.deleteWordBefore();
@@ -364,7 +378,7 @@ fn deletion(self: *Repl, key: Key) HandlerResult {
     return .noop;
 }
 
-const handlers: []const *const fn (*Repl, Key) HandlerResult = &.{
+const handlers: []const *const fn (*Repl, Key) anyerror!HandlerResult = &.{
     ctrlCombinations,
     arrows,
     deletion,

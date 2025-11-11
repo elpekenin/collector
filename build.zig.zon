@@ -5,8 +5,8 @@
     .fingerprint = 0xcedbf54c3db22bae,
     .dependencies = .{
         .ptz = .{
-            .url = "git+https://github.com/elpekenin/ptz#af934c1399b839017495656cd4aa1de6cd518c8f",
-            .hash = "ptz-0.0.1-CesFmsfuAACQk33rgTAwq3KKtZCxC8GuyKb8ws4JkzfY",
+            .url = "git+https://github.com/elpekenin/ptz#8c9f0e0d5b5bc52feab1745e1f90d501e654b090",
+            .hash = "ptz-0.0.1-CesFmhzwAAACeH_GLbI_d7qdzvB6zc_KwmhyUVB5EEVx",
         },
         .sqlite = .{
             .url = "git+https://github.com/vrischmann/zig-sqlite#0b75ba276d34de3141ec1697e3ef7c836d7b38e7",
@@ -17,8 +17,9 @@
             .hash = "vaxis-0.5.1-BWNV_IcuCQCjrYTHNe3-ArhtpwLzRfgI2mBu0yKT7IZl",
         },
         .zmig = .{
-            .url = "git+https://github.com/jeansidharta/zmig#f448872e9bbec7e8936ff642bd51554484fe2ae7",
-            .hash = "zmig-0.0.1-xy17mDzaAAAvL_ijPzetlq6dgLW9mirHg9BJOuYOLBKQ",
+            // .url = "git+https://github.com/jeansidharta/zmig#f448872e9bbec7e8936ff642bd51554484fe2ae7",
+            // .hash = "zmig-0.0.1-xy17mDzaAAAvL_ijPzetlq6dgLW9mirHg9BJOuYOLBKQ",
+            .path = "../zmig",
         },
     },
     .paths = .{
